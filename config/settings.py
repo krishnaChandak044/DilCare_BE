@@ -29,6 +29,13 @@ INSTALLED_APPS = [
     # Local
     "core",
     "accounts",
+    "health",
+    "medicine",
+    "water",
+    "family",
+    "doctor",
+    "steps",
+    "community",
 ]
 
 # ---------------------------------------------------------------------------
