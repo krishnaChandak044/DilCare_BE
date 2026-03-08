@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     "bmi",
     "sos",
     "gyaan",
+    "ai",
 ]
 
 # ---------------------------------------------------------------------------
@@ -160,3 +161,11 @@ MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# ---------------------------------------------------------------------------
+# AI Assistant Configuration
+# ---------------------------------------------------------------------------
+AI_PROVIDER = "groq"                        # "groq" | "gemini" | "ollama"
+AI_API_KEY = "your-api-key-here"             # Replace with your actual API key
+AI_MODEL = ""                                # Leave blank for provider default
+OLLAMA_BASE_URL = "http://localhost:11434"   # Only needed for Ollama

@@ -22,6 +22,7 @@ urlpatterns = [
     path("api/v1/bmi/", include("bmi.urls")),
     path("api/v1/sos/", include("sos.urls")),
     path("api/v1/gyaan/", include("gyaan.urls")),
+    path("api/v1/ai/", include("ai.urls")),
     # ── API Docs ────────────────────────────────────────────
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
