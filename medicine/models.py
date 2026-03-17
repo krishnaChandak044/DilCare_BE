@@ -5,6 +5,7 @@ from django.db import models
 from django.conf import settings
 from core.models import SoftDeleteModel
 
+#Comment added as per the issue 
 
 class Medicine(SoftDeleteModel):
     """
