@@ -5,9 +5,11 @@ Enhanced with settings, devices, logout, and change password.
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.views import TokenObtainPairView
 
 from .models import UserSettings, UserDevice
 from .serializers import (
@@ -28,6 +30,8 @@ class RegisterView(generics.CreateAPIView):
     """
     serializer_class = RegisterSerializer
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_register"
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -55,6 +59,7 @@ class LogoutView(APIView):
     Blacklists the refresh token to logout the user.
     """
     permission_classes = [IsAuthenticated]
+
 
     def post(self, request):
         serializer = LogoutSerializer(data=request.data)
@@ -179,3 +184,12 @@ class MeView(APIView):
             "name": f"{user.first_name} {user.last_name}".strip() or "",
             "is_authenticated": True,
         })
+
+
+class LoginView(TokenObtainPairView):
+    """
+    POST /api/v1/auth/login/
+    JWT login endpoint with scoped rate limiting.
+    """
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_login"

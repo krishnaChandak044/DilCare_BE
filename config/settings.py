@@ -1,14 +1,30 @@
 """
 DilCare Backend — Django settings
 """
+import os
 from pathlib import Path
 from datetime import timedelta
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = "django-insecure-v=laa)s=iaoful3534qqex%yp#d0@_wkc0o++2^eqjsv_-eud_"
-DEBUG = True
-ALLOWED_HOSTS = ["*"]
+
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_list(name: str, default: list[str] | None = None) -> list[str]:
+    value = os.getenv(name)
+    if not value:
+        return default or []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-dev-only-change-me")
+DEBUG = env_bool("DJANGO_DEBUG", default=False)
+ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
 
 # ---------------------------------------------------------------------------
 # Applications
@@ -59,7 +75,8 @@ MIDDLEWARE = [
 # ---------------------------------------------------------------------------
 # CORS — allow React Native dev traffic
 # ---------------------------------------------------------------------------
-CORS_ALLOW_ALL_ORIGINS = True  # Lock down in production
+CORS_ALLOW_ALL_ORIGINS = env_bool("CORS_ALLOW_ALL_ORIGINS", default=False)
+CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", default=[])
 
 # ---------------------------------------------------------------------------
 # Auth
@@ -76,6 +93,19 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),
+    "DEFAULT_THROTTLE_CLASSES": (
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+        "rest_framework.throttling.ScopedRateThrottle",
+    ),
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "60/min",
+        "user": "120/min",
+        "auth_login": "5/min",
+        "auth_register": "5/hour",
+        "link_parent": "10/hour",
+        "link_code_regenerate": "5/day",
+    },
     "DEFAULT_PAGINATION_CLASS": "core.pagination.StandardPagination",
     "PAGE_SIZE": 20,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
@@ -166,6 +196,6 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # AI Assistant Configuration
 # ---------------------------------------------------------------------------
 AI_PROVIDER = "groq"                        # "groq" | "gemini" | "ollama"
-AI_API_KEY = "your-api-key-here"             # Replace with your actual API key
+AI_API_KEY = os.getenv("AI_API_KEY", "")
 AI_MODEL = ""                                # Leave blank for provider default
 OLLAMA_BASE_URL = "http://localhost:11434"   # Only needed for Ollama
