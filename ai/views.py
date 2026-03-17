@@ -113,8 +113,10 @@ class ConversationListView(OwnerQuerySetMixin, generics.ListAPIView):
     GET /api/v1/ai/conversations/
     List all conversations for the user (newest first).
     """
+    queryset = Conversation.objects.all()
     serializer_class = ConversationSerializer
     permission_classes = [IsAuthenticated]
+    owner_field = "user"
 
 
 class ConversationDetailView(OwnerQuerySetMixin, generics.RetrieveDestroyAPIView):
@@ -122,11 +124,13 @@ class ConversationDetailView(OwnerQuerySetMixin, generics.RetrieveDestroyAPIView
     GET    /api/v1/ai/conversations/{id}/  — full conversation with all messages
     DELETE /api/v1/ai/conversations/{id}/  — soft-delete conversation
     """
+    queryset = Conversation.objects.all()
     serializer_class = ConversationDetailSerializer
     permission_classes = [IsAuthenticated]
+    owner_field = "user"
 
 
-# ============ Conversation History ============
+#  Conversation History 
 
 class ConversationHistoryView(APIView):
     """

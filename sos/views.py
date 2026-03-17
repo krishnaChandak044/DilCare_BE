@@ -26,6 +26,7 @@ class EmergencyContactListCreateView(OwnerQuerySetMixin, generics.ListCreateAPIV
     GET  /api/v1/sos/contacts/      — list all emergency contacts
     POST /api/v1/sos/contacts/      — add a new emergency contact
     """
+    queryset = EmergencyContact.objects.all()
     permission_classes = [IsAuthenticated]
 
     def get_serializer_class(self):
@@ -43,6 +44,7 @@ class EmergencyContactDetailView(OwnerQuerySetMixin, generics.RetrieveUpdateDest
     PATCH  /api/v1/sos/contacts/{id}/  — update a contact
     DELETE /api/v1/sos/contacts/{id}/  — soft-delete a contact
     """
+    queryset = EmergencyContact.objects.all()
     serializer_class = EmergencyContactSerializer
     permission_classes = [IsAuthenticated, IsOwner]
 
@@ -80,6 +82,7 @@ class SOSAlertListView(OwnerQuerySetMixin, generics.ListAPIView):
     """
     GET /api/v1/sos/alerts/  — list all SOS alerts for the user (history).
     """
+    queryset = SOSAlert.objects.all()
     serializer_class = SOSAlertSerializer
     permission_classes = [IsAuthenticated]
 

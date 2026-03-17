@@ -19,6 +19,7 @@ class BMIRecordListCreateView(OwnerQuerySetMixin, generics.ListCreateAPIView):
     GET  /api/v1/bmi/        — list all BMI records for the authenticated user (newest first)
     POST /api/v1/bmi/        — create a new BMI record (bmi & category auto-computed)
     """
+    queryset = BMIRecord.objects.all()
     permission_classes = [IsAuthenticated]
 
     def get_serializer_class(self):
@@ -43,6 +44,7 @@ class BMIRecordDetailView(OwnerQuerySetMixin, generics.RetrieveDestroyAPIView):
     GET    /api/v1/bmi/{id}/  — retrieve single BMI record
     DELETE /api/v1/bmi/{id}/  — soft-delete a BMI record
     """
+    queryset = BMIRecord.objects.all()
     serializer_class = BMIRecordSerializer
     permission_classes = [IsAuthenticated, IsOwner]
 
