@@ -8,6 +8,7 @@ from rest_framework import generics, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.throttling import ScopedRateThrottle
 from drf_spectacular.utils import extend_schema
 
 from .models import FamilyLink
@@ -39,6 +40,8 @@ class LinkParentView(APIView):
     POST: Link to a parent using their unique link code.
     """
     permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "link_parent"
 
     @extend_schema(request=LinkParentSerializer, responses={201: FamilyLinkSerializer})
     def post(self, request):
@@ -278,6 +281,8 @@ class MyLinkCodeView(APIView):
     POST: Regenerate link code.
     """
     permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "link_code_regenerate"
 
     def get(self, request):
         return Response({

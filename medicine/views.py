@@ -82,7 +82,7 @@ class MedicineDetailView(OwnerQuerySetMixin, generics.RetrieveUpdateDestroyAPIVi
         instance.soft_delete()
 
 
-# ============ Medicine Intake Views ============
+# Medicine Intake Views =
 
 class TodayMedicinesView(APIView):
     """
