@@ -46,9 +46,7 @@ def can_view_challenge(user, challenge):
     ).exists()
 
 
-# ═════════════════════════════════════════════════════════════════════
-# LEADERBOARD — Computed from Steps DailyStepLog
-# ═════════════════════════════════════════════════════════════════════
+=# LEADERBOARD — Computed from Steps DailyStepLog
 
 class LeaderboardView(APIView):
     """

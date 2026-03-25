@@ -23,12 +23,10 @@ def env_list(name: str, default: list[str] | None = None) -> list[str]:
 
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-dev-only-change-me")
-DEBUG = env_bool("DJANGO_DEBUG", default=False)
+DEBUG = env_bool("DJANGO_DEBUG", default=True)
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
 
-# ---------------------------------------------------------------------------
 # Applications
-# ---------------------------------------------------------------------------
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -58,9 +56,7 @@ INSTALLED_APPS = [
     "ai",
 ]
 
-# ---------------------------------------------------------------------------
 # Middleware
-# ---------------------------------------------------------------------------
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",  # must be first
     "django.middleware.security.SecurityMiddleware",
@@ -72,20 +68,15 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-# ---------------------------------------------------------------------------
 # CORS — allow React Native dev traffic
-# ---------------------------------------------------------------------------
 CORS_ALLOW_ALL_ORIGINS = env_bool("CORS_ALLOW_ALL_ORIGINS", default=False)
 CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", default=[])
+ALLOWED_HOSTS = ['0.0.0.0', '127.0.0.1', 'localhost']
 
-# ---------------------------------------------------------------------------
 # Auth
-# ---------------------------------------------------------------------------
 AUTH_USER_MODEL = "accounts.User"
 
-# ---------------------------------------------------------------------------
 # REST Framework
-# ---------------------------------------------------------------------------
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
@@ -133,9 +124,7 @@ SPECTACULAR_SETTINGS = {
     "SERVE_INCLUDE_SCHEMA": False,
 }
 
-# ---------------------------------------------------------------------------
 # URL / WSGI
-# ---------------------------------------------------------------------------
 ROOT_URLCONF = "config.urls"
 WSGI_APPLICATION = "config.wsgi.application"
 
@@ -186,15 +175,14 @@ USE_TZ = True
 # ---------------------------------------------------------------------------
 # Static / Media
 # ---------------------------------------------------------------------------
-STATIC_URL = "static/"
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# ---------------------------------------------------------------------------
 # AI Assistant Configuration
-# ---------------------------------------------------------------------------
 AI_PROVIDER = "groq"                        # "groq" | "gemini" | "ollama"
 AI_API_KEY = os.getenv("AI_API_KEY", "")
 AI_MODEL = ""                                # Leave blank for provider default
