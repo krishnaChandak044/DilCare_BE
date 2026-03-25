@@ -23,13 +23,14 @@ from .serializers import (
 )
 
 
-# ============ Medicine Views ============
+# Medicine Views 
 
 class MedicineListCreateView(OwnerQuerySetMixin, generics.ListCreateAPIView):
     """
     GET: List all medicines for the authenticated user.
     POST: Create a new medicine.
     """
+    queryset = Medicine.objects.all()
     serializer_class = MedicineSerializer
     permission_classes = [IsAuthenticated]
     owner_field = "user"
@@ -72,6 +73,7 @@ class MedicineDetailView(OwnerQuerySetMixin, generics.RetrieveUpdateDestroyAPIVi
     PUT/PATCH: Update a medicine.
     DELETE: Soft-delete a medicine.
     """
+    queryset = Medicine.objects.all()
     serializer_class = MedicineSerializer
     permission_classes = [IsAuthenticated, IsOwner]
     owner_field = "user"
@@ -80,7 +82,7 @@ class MedicineDetailView(OwnerQuerySetMixin, generics.RetrieveUpdateDestroyAPIVi
         instance.soft_delete()
 
 
-# ============ Medicine Intake Views ============
+# Medicine Intake Views =
 
 class TodayMedicinesView(APIView):
     """
@@ -197,6 +199,7 @@ class MedicineIntakeListView(OwnerQuerySetMixin, generics.ListAPIView):
     GET: List medicine intakes for the authenticated user.
     Filters: date, medicine_id, status
     """
+    queryset = MedicineIntake.objects.all()
     serializer_class = MedicineIntakeSerializer
     permission_classes = [IsAuthenticated]
 
@@ -298,6 +301,7 @@ class PrescriptionListCreateView(OwnerQuerySetMixin, generics.ListCreateAPIView)
     GET: List all prescriptions for the authenticated user.
     POST: Upload a new prescription.
     """
+    queryset = Prescription.objects.all()
     serializer_class = PrescriptionSerializer
     permission_classes = [IsAuthenticated]
     owner_field = "user"
@@ -312,6 +316,7 @@ class PrescriptionDetailView(OwnerQuerySetMixin, generics.RetrieveUpdateDestroyA
     PUT/PATCH: Update a prescription.
     DELETE: Soft-delete a prescription.
     """
+    queryset = Prescription.objects.all()
     serializer_class = PrescriptionSerializer
     permission_classes = [IsAuthenticated, IsOwner]
     owner_field = "user"

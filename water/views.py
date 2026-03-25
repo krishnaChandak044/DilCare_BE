@@ -352,6 +352,7 @@ class DailyWaterLogListView(OwnerQuerySetMixin, generics.ListAPIView):
     """
     GET: List all water logs for the authenticated user.
     """
+    queryset = DailyWaterLog.objects.all()
     serializer_class = DailyWaterLogSerializer
     permission_classes = [IsAuthenticated]
     owner_field = "user"
@@ -375,6 +376,7 @@ class DailyWaterLogDetailView(OwnerQuerySetMixin, generics.RetrieveAPIView):
     """
     GET: Retrieve a specific water log.
     """
+    queryset = DailyWaterLog.objects.all()
     serializer_class = DailyWaterLogSerializer
     permission_classes = [IsAuthenticated, IsOwner]
     owner_field = "user"
