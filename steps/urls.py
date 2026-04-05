@@ -12,6 +12,7 @@ from .views import (
     WeeklyChartView,
     StepEntriesView,
 )
+from . import fit_views
 
 app_name = "steps"
 
@@ -25,6 +26,9 @@ urlpatterns = [
     
     # Goal management
     path("goal/", StepGoalView.as_view(), name="goal"),
+    
+    # Sync integrations
+    path("sync/google-fit/", fit_views.GoogleFitSyncView.as_view(), name="google-fit-sync"),
     
     # History and stats
     path("history/", StepHistoryView.as_view(), name="history"),
