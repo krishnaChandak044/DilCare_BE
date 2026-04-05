@@ -46,7 +46,7 @@ def can_view_challenge(user, challenge):
     ).exists()
 
 
-=# LEADERBOARD — Computed from Steps DailyStepLog
+# LEADERBOARD — Computed from Steps DailyStepLog
 
 class LeaderboardView(APIView):
     """
@@ -98,11 +98,11 @@ class LeaderboardView(APIView):
         user_stats = (
             qs.values('user')
             .annotate(
-                total_steps=Sum('total_steps'),
+                total_steps_sum=Sum('total_steps'),
                 avg_steps=Avg('total_steps'),
                 days_active=Count('id'),
             )
-            .order_by('-total_steps')[:50]
+            .order_by('-total_steps_sum')[:50]
         )
 
         # Build leaderboard entries with rank
@@ -120,13 +120,13 @@ class LeaderboardView(APIView):
             is_self = uid == request.user.id
             if is_self:
                 my_rank = rank
-                my_steps = stat['total_steps']
+                my_steps = stat['total_steps_sum']
 
             entries.append({
                 'rank': rank,
                 'user_id': uid,
                 'user_name': user_map.get(uid, 'Unknown'),
-                'total_steps': stat['total_steps'],
+                'total_steps': stat['total_steps_sum'],
                 'avg_steps': round(stat['avg_steps'] or 0),
                 'days_active': stat['days_active'],
                 'is_self': is_self,
@@ -147,7 +147,7 @@ class LeaderboardView(APIView):
             'total_participants': len(entries),
         }
 
-        serializer = LeaderboardSerializer(data)
+        serializer = LeaderboardSerializer(instance=data)
         return Response(serializer.data)
 
 
