@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     "sos",
     "gyaan",
     "ai",
+    "location",
 ]
 
 # Middleware
@@ -68,9 +69,27 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-# CORS — allow React Native dev traffic
+# CORS — allow React Native dev traffic + Vite web dev server + other development ports
 CORS_ALLOW_ALL_ORIGINS = env_bool("CORS_ALLOW_ALL_ORIGINS", default=False)
-CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", default=[])
+CORS_ALLOWED_ORIGINS = env_list(
+    "CORS_ALLOWED_ORIGINS",
+    default=[
+        "http://localhost:8081",
+        "http://127.0.0.1:8081",
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+        "http://localhost:19006",
+        "http://127.0.0.1:19006",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "http://localhost:5175",
+        "http://127.0.0.1:5175",
+    ],
+)
 ALLOWED_HOSTS = ['0.0.0.0', '127.0.0.1', 'localhost']
 
 # Auth
@@ -96,6 +115,9 @@ REST_FRAMEWORK = {
         "auth_register": "5/hour",
         "link_parent": "10/hour",
         "link_code_regenerate": "5/day",
+        "location_ping_upload": "300/min",
+        "location_history": "120/hour",
+        "location_live": "180/min",
     },
     "DEFAULT_PAGINATION_CLASS": "core.pagination.StandardPagination",
     "PAGE_SIZE": 20,
