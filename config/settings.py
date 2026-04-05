@@ -1,18 +1,32 @@
 """
 DilCare Backend — Django settings
 """
+import os
 from pathlib import Path
 from datetime import timedelta
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = "django-insecure-v=laa)s=iaoful3534qqex%yp#d0@_wkc0o++2^eqjsv_-eud_"
-DEBUG = True
-ALLOWED_HOSTS = ["*"]
 
-# ---------------------------------------------------------------------------
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_list(name: str, default: list[str] | None = None) -> list[str]:
+    value = os.getenv(name)
+    if not value:
+        return default or []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-dev-only-change-me")
+DEBUG = env_bool("DJANGO_DEBUG", default=True)
+ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
+
 # Applications
-# ---------------------------------------------------------------------------
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -40,11 +54,10 @@ INSTALLED_APPS = [
     "sos",
     "gyaan",
     "ai",
+    "location",
 ]
 
-# ---------------------------------------------------------------------------
 # Middleware
-# ---------------------------------------------------------------------------
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",  # must be first
     "django.middleware.security.SecurityMiddleware",
@@ -56,19 +69,33 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-# ---------------------------------------------------------------------------
-# CORS — allow React Native dev traffic
-# ---------------------------------------------------------------------------
-CORS_ALLOW_ALL_ORIGINS = True  # Lock down in production
+# CORS — allow React Native dev traffic + Vite web dev server + other development ports
+CORS_ALLOW_ALL_ORIGINS = env_bool("CORS_ALLOW_ALL_ORIGINS", default=False)
+CORS_ALLOWED_ORIGINS = env_list(
+    "CORS_ALLOWED_ORIGINS",
+    default=[
+        "http://localhost:8081",
+        "http://127.0.0.1:8081",
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+        "http://localhost:19006",
+        "http://127.0.0.1:19006",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "http://localhost:5175",
+        "http://127.0.0.1:5175",
+    ],
+)
+ALLOWED_HOSTS = ['0.0.0.0', '127.0.0.1', 'localhost']
 
-# ---------------------------------------------------------------------------
 # Auth
-# ---------------------------------------------------------------------------
 AUTH_USER_MODEL = "accounts.User"
 
-# ---------------------------------------------------------------------------
 # REST Framework
-# ---------------------------------------------------------------------------
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
@@ -76,6 +103,22 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),
+    "DEFAULT_THROTTLE_CLASSES": (
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+        "rest_framework.throttling.ScopedRateThrottle",
+    ),
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "60/min",
+        "user": "120/min",
+        "auth_login": "5/min",
+        "auth_register": "5/hour",
+        "link_parent": "10/hour",
+        "link_code_regenerate": "5/day",
+        "location_ping_upload": "300/min",
+        "location_history": "120/hour",
+        "location_live": "180/min",
+    },
     "DEFAULT_PAGINATION_CLASS": "core.pagination.StandardPagination",
     "PAGE_SIZE": 20,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
@@ -103,9 +146,7 @@ SPECTACULAR_SETTINGS = {
     "SERVE_INCLUDE_SCHEMA": False,
 }
 
-# ---------------------------------------------------------------------------
 # URL / WSGI
-# ---------------------------------------------------------------------------
 ROOT_URLCONF = "config.urls"
 WSGI_APPLICATION = "config.wsgi.application"
 
@@ -156,16 +197,15 @@ USE_TZ = True
 # ---------------------------------------------------------------------------
 # Static / Media
 # ---------------------------------------------------------------------------
-STATIC_URL = "static/"
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# ---------------------------------------------------------------------------
 # AI Assistant Configuration
-# ---------------------------------------------------------------------------
 AI_PROVIDER = "groq"                        # "groq" | "gemini" | "ollama"
-AI_API_KEY = "your-api-key-here"             # Replace with your actual API key
+AI_API_KEY = os.getenv("AI_API_KEY", "")
 AI_MODEL = ""                                # Leave blank for provider default
 OLLAMA_BASE_URL = "http://localhost:11434"   # Only needed for Ollama

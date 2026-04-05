@@ -29,9 +29,24 @@ from .serializers import (
 User = get_user_model()
 
 
-# ═════════════════════════════════════════════════════════════════════
+def can_view_challenge(user, challenge):
+    if challenge.is_public or challenge.created_by_id == user.id:
+        return True
+
+    if challenge.group_id:
+        return GroupMembership.objects.filter(
+            group_id=challenge.group_id,
+            user=user,
+            is_active=True,
+        ).exists()
+
+    return ChallengeParticipant.objects.filter(
+        challenge=challenge,
+        user=user,
+    ).exists()
+
+
 # LEADERBOARD — Computed from Steps DailyStepLog
-# ═════════════════════════════════════════════════════════════════════
 
 class LeaderboardView(APIView):
     """
@@ -83,11 +98,11 @@ class LeaderboardView(APIView):
         user_stats = (
             qs.values('user')
             .annotate(
-                total_steps=Sum('total_steps'),
+                total_steps_sum=Sum('total_steps'),
                 avg_steps=Avg('total_steps'),
                 days_active=Count('id'),
             )
-            .order_by('-total_steps')[:50]
+            .order_by('-total_steps_sum')[:50]
         )
 
         # Build leaderboard entries with rank
@@ -105,13 +120,13 @@ class LeaderboardView(APIView):
             is_self = uid == request.user.id
             if is_self:
                 my_rank = rank
-                my_steps = stat['total_steps']
+                my_steps = stat['total_steps_sum']
 
             entries.append({
                 'rank': rank,
                 'user_id': uid,
                 'user_name': user_map.get(uid, 'Unknown'),
-                'total_steps': stat['total_steps'],
+                'total_steps': stat['total_steps_sum'],
                 'avg_steps': round(stat['avg_steps'] or 0),
                 'days_active': stat['days_active'],
                 'is_self': is_self,
@@ -132,7 +147,7 @@ class LeaderboardView(APIView):
             'total_participants': len(entries),
         }
 
-        serializer = LeaderboardSerializer(data)
+        serializer = LeaderboardSerializer(instance=data)
         return Response(serializer.data)
 
 
@@ -185,7 +200,7 @@ class GroupDetailView(APIView):
 
     def _get_group(self, pk):
         try:
-            return CommunityGroup.objects.get(pk=pk)
+            return CommunityGroup.objects.get(pk=pk, deleted_at__isnull=True)
         except CommunityGroup.DoesNotExist:
             return None
 
@@ -194,10 +209,20 @@ class GroupDetailView(APIView):
             user=user, group=group, role='admin', is_active=True
         ).exists()
 
+    def _is_member(self, user, group):
+        return GroupMembership.objects.filter(
+            user=user, group=group, is_active=True
+        ).exists()
+
+    def _can_view_group(self, user, group):
+        return group.is_public or self._is_member(user, group)
+
     @extend_schema(responses={200: CommunityGroupSerializer})
     def get(self, request, pk):
         group = self._get_group(pk)
         if not group:
+            return Response({"error": "Group not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not self._can_view_group(request.user, group):
             return Response({"error": "Group not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response(
             CommunityGroupSerializer(group, context={'request': request}).data
@@ -237,6 +262,17 @@ class GroupMembersView(APIView):
 
     @extend_schema(responses={200: GroupMemberSerializer(many=True)})
     def get(self, request, pk):
+        try:
+            group = CommunityGroup.objects.get(pk=pk, deleted_at__isnull=True)
+        except CommunityGroup.DoesNotExist:
+            return Response({"error": "Group not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        is_member = GroupMembership.objects.filter(
+            group=group, user=request.user, is_active=True
+        ).exists()
+        if not is_member:
+            return Response({"error": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
+
         memberships = GroupMembership.objects.filter(
             group_id=pk, is_active=True
         ).select_related('user')
@@ -400,7 +436,7 @@ class ChallengeDetailView(APIView):
 
     def _get_challenge(self, pk):
         try:
-            return Challenge.objects.get(pk=pk)
+            return Challenge.objects.get(pk=pk, deleted_at__isnull=True)
         except Challenge.DoesNotExist:
             return None
 
@@ -408,6 +444,8 @@ class ChallengeDetailView(APIView):
     def get(self, request, pk):
         challenge = self._get_challenge(pk)
         if not challenge:
+            return Response({"error": "Challenge not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not can_view_challenge(request.user, challenge):
             return Response({"error": "Challenge not found."}, status=status.HTTP_404_NOT_FOUND)
         challenge.auto_update_status()
         return Response(
@@ -433,8 +471,11 @@ class JoinChallengeView(APIView):
 
     def post(self, request, pk):
         try:
-            challenge = Challenge.objects.get(pk=pk)
+            challenge = Challenge.objects.get(pk=pk, deleted_at__isnull=True)
         except Challenge.DoesNotExist:
+            return Response({"error": "Challenge not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if not can_view_challenge(request.user, challenge):
             return Response({"error": "Challenge not found."}, status=status.HTTP_404_NOT_FOUND)
 
         if challenge.status not in ('upcoming', 'active'):
@@ -499,9 +540,22 @@ class ChallengeParticipantsView(APIView):
     @extend_schema(responses={200: ChallengeParticipantSerializer(many=True)})
     def get(self, request, pk):
         try:
-            challenge = Challenge.objects.get(pk=pk)
+            challenge = Challenge.objects.get(pk=pk, deleted_at__isnull=True)
         except Challenge.DoesNotExist:
             return Response({"error": "Challenge not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        can_view = (
+            challenge.created_by_id == request.user.id
+            or ChallengeParticipant.objects.filter(challenge=challenge, user=request.user).exists()
+        )
+        if challenge.group_id and not can_view:
+            can_view = GroupMembership.objects.filter(
+                group_id=challenge.group_id,
+                user=request.user,
+                is_active=True,
+            ).exists()
+        if not can_view:
+            return Response({"error": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
 
         participants = challenge.participants.select_related('user').all()
 
