@@ -3,6 +3,7 @@ Accounts — DRF Serializers for auth and profile.
 Enhanced with better validation and new serializers for settings/devices.
 """
 import re
+from django.db import transaction
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
@@ -13,11 +14,14 @@ User = get_user_model()
 
 
 class RegisterSerializer(serializers.Serializer):
-    """Handles user registration with email + password."""
+    """Handles user registration with email + password.
+    Optionally creates a family group atomically if family_name is provided.
+    """
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True, validators=[validate_password])
     password_confirm = serializers.CharField(write_only=True)
     name = serializers.CharField(max_length=150, required=False, default="")
+    family_name = serializers.CharField(max_length=100, required=False, default="")
 
     def validate_email(self, value):
         email = value.lower().strip()
@@ -30,9 +34,12 @@ class RegisterSerializer(serializers.Serializer):
             raise serializers.ValidationError({"password_confirm": "Passwords do not match."})
         return attrs
 
+    @transaction.atomic
     def create(self, validated_data):
         validated_data.pop("password_confirm")
         name = validated_data.pop("name", "")
+        family_name = validated_data.pop("family_name", "")
+
         user = User.objects.create_user(
             email=validated_data["email"],
             password=validated_data["password"],
@@ -42,6 +49,20 @@ class RegisterSerializer(serializers.Serializer):
             user.first_name = parts[0]
             user.last_name = parts[1] if len(parts) > 1 else ""
             user.save(update_fields=["first_name", "last_name"])
+
+        # Atomically create family if name provided
+        if family_name.strip():
+            from family.models import Family, FamilyMembership
+            family = Family.objects.create(
+                name=family_name.strip(),
+                created_by=user,
+            )
+            FamilyMembership.objects.create(
+                family=family,
+                user=user,
+                role="admin",
+            )
+
         return user
 
 

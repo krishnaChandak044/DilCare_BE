@@ -7,14 +7,12 @@ and challenge progress tracking.
 from django.db import models
 from django.contrib.auth import get_user_model
 from django.utils import timezone
-from core.models import SoftDeleteModel
+from core.models import SoftDeleteModel, TimeStampedModel
 
 User = get_user_model()
 
 
-# ─────────────────────────────────────────────────────────────────────
 # Community Groups
-# ─────────────────────────────────────────────────────────────────────
 
 class CommunityGroup(SoftDeleteModel):
     """
@@ -329,3 +327,263 @@ class CommunityNotification(SoftDeleteModel):
             self.is_read = True
             self.read_at = timezone.now()
             self.save(update_fields=['is_read', 'read_at'])
+
+
+# Community Feed
+
+class CommunityPost(SoftDeleteModel):
+    """A community feed post. Optionally scoped to a group."""
+    POST_TYPE_CHOICES = [
+        ('text', 'Text'),
+        ('milestone', 'Milestone'),
+    ]
+    MILESTONE_TYPE_CHOICES = [
+        ('steps', 'Steps'),
+        ('water', 'Water'),
+        ('medicine', 'Medicine'),
+        ('streak', 'Streak'),
+    ]
+
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE,
+        related_name='community_posts'
+    )
+    group = models.ForeignKey(
+        CommunityGroup, on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='posts'
+    )
+    content = models.TextField(max_length=1000)
+    post_type = models.CharField(max_length=20, choices=POST_TYPE_CHOICES, default='text')
+    milestone_type = models.CharField(
+        max_length=20, choices=MILESTONE_TYPE_CHOICES,
+        null=True, blank=True,
+    )
+    milestone_value = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['-created_at']),
+            models.Index(fields=['group', '-created_at']),
+            models.Index(fields=['user', 'post_type', '-created_at']),
+        ]
+
+    def __str__(self):
+        scope = self.group.name if self.group else 'Global'
+        return f"{self.user.email} · {scope}"
+
+
+class CommunityPostReaction(TimeStampedModel):
+    """Like reaction for a post with toggle support."""
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE,
+        related_name='community_post_reactions'
+    )
+    post = models.ForeignKey(
+        CommunityPost, on_delete=models.CASCADE,
+        related_name='reactions'
+    )
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        unique_together = ['user', 'post']
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user.email} → {self.post_id} ({'active' if self.is_active else 'inactive'})"
+
+
+class CommunityPostComment(SoftDeleteModel):
+    """Comment on a community post."""
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE,
+        related_name='community_post_comments'
+    )
+    post = models.ForeignKey(
+        CommunityPost, on_delete=models.CASCADE,
+        related_name='comments'
+    )
+    content = models.TextField(max_length=500)
+
+    class Meta:
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['post', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.email} comment on {self.post_id}"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Group Chat
+# ─────────────────────────────────────────────────────────────────────
+
+class GroupChatMessage(SoftDeleteModel):
+    """Simple persistent group chat message."""
+    group = models.ForeignKey(
+        CommunityGroup, on_delete=models.CASCADE,
+        related_name='chat_messages'
+    )
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE,
+        related_name='group_chat_messages'
+    )
+    content = models.TextField(max_length=1000)
+
+    class Meta:
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['group', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.group.name} · {self.user.email}"
+
+
+class UserCommunityPreference(SoftDeleteModel):
+    """User-level smart notification preferences for community updates."""
+    user = models.OneToOneField(
+        User, on_delete=models.CASCADE,
+        related_name='community_preference'
+    )
+    mute_all = models.BooleanField(default=False)
+    digest_only = models.BooleanField(default=False)
+    quiet_hours_enabled = models.BooleanField(default=False)
+    quiet_hours_start = models.TimeField(null=True, blank=True)
+    quiet_hours_end = models.TimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Prefs: {self.user.email}"
+
+
+class GroupNotificationPreference(SoftDeleteModel):
+    """Per-group notification muting controls."""
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE,
+        related_name='group_notification_preferences'
+    )
+    group = models.ForeignKey(
+        CommunityGroup, on_delete=models.CASCADE,
+        related_name='notification_preferences'
+    )
+    is_muted = models.BooleanField(default=False)
+
+    class Meta:
+        unique_together = ['user', 'group']
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user.email} mute={self.is_muted} {self.group.name}"
+
+
+class CommunityBadge(SoftDeleteModel):
+    """Badge catalog for community achievements."""
+    TYPE_CHOICES = [
+        ('challenge_complete', 'Challenge Completion'),
+        ('challenge_winner', 'Challenge Winner'),
+        ('streak', 'Streak Badge'),
+        ('milestone', 'Milestone Badge'),
+    ]
+
+    code = models.CharField(max_length=40, unique=True)
+    title = models.CharField(max_length=120)
+    description = models.TextField(blank=True, default='')
+    badge_type = models.CharField(max_length=25, choices=TYPE_CHOICES, default='milestone')
+    icon = models.CharField(max_length=30, default='trophy')
+    color = models.CharField(max_length=7, default='#F59E0B')
+
+    class Meta:
+        ordering = ['title']
+
+    def __str__(self):
+        return self.title
+
+
+class UserBadge(SoftDeleteModel):
+    """Awarded badges for users."""
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE,
+        related_name='community_badges'
+    )
+    badge = models.ForeignKey(
+        CommunityBadge, on_delete=models.CASCADE,
+        related_name='awards'
+    )
+    challenge = models.ForeignKey(
+        Challenge, on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='awarded_badges'
+    )
+
+    class Meta:
+        ordering = ['-created_at']
+        unique_together = ['user', 'badge', 'challenge']
+
+    def __str__(self):
+        return f"{self.user.email} → {self.badge.code}"
+
+
+class CommunityModerationReport(SoftDeleteModel):
+    """Member-submitted moderation reports for posts/comments/chat."""
+    TARGET_CHOICES = [
+        ('post', 'Post'),
+        ('comment', 'Comment'),
+        ('chat_message', 'Chat Message'),
+    ]
+    STATUS_CHOICES = [
+        ('open', 'Open'),
+        ('reviewed', 'Reviewed'),
+        ('resolved', 'Resolved'),
+        ('dismissed', 'Dismissed'),
+    ]
+
+    reported_by = models.ForeignKey(
+        User, on_delete=models.CASCADE,
+        related_name='community_reports'
+    )
+    target_type = models.CharField(max_length=20, choices=TARGET_CHOICES)
+    target_id = models.UUIDField()
+    reason = models.CharField(max_length=200)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open')
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['target_type', 'target_id']),
+            models.Index(fields=['status']),
+        ]
+
+    def __str__(self):
+        return f"{self.target_type}:{self.target_id} ({self.status})"
+
+
+class GroupChatReadState(SoftDeleteModel):
+    """Tracks last seen chat message per user/group for unread counts."""
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE,
+        related_name='group_chat_read_states'
+    )
+    group = models.ForeignKey(
+        CommunityGroup, on_delete=models.CASCADE,
+        related_name='chat_read_states'
+    )
+    last_seen_message = models.ForeignKey(
+        GroupChatMessage,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='seen_by_states',
+    )
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ['user', 'group']
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return f"ReadState: {self.user.email} @ {self.group.name}"

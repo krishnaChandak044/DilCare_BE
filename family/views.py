@@ -1,301 +1,517 @@
 """
-Family — API views for family linking functionality.
-Enables children to link to and monitor parents' health.
+Family — API views for family group functionality.
+Create, join, view, and manage a family group of up to 5 members.
 """
 from django.contrib.auth import get_user_model
 from django.utils import timezone
-from rest_framework import generics, status
+from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.throttling import ScopedRateThrottle
 from drf_spectacular.utils import extend_schema
 
-from .models import FamilyLink
+from .models import Family, FamilyMembership
 from .serializers import (
-    FamilyLinkSerializer,
-    LinkParentSerializer,
-    ParentHealthSummarySerializer,
+    CreateFamilySerializer,
+    JoinFamilySerializer,
+    FamilySerializer,
+    FamilyMemberHealthSummarySerializer,
+    UpgradePlanSerializer,
 )
 
 User = get_user_model()
 
 
-class LinkedParentsListView(generics.ListAPIView):
+def _get_member_health_data(member_user):
     """
-    GET: List all parents linked to the current user (child).
+    Build health summary dict for a given user.
+    Shared helper used by FamilyMemberHealthView.
     """
-    serializer_class = FamilyLinkSerializer
+    today = timezone.localdate()
+
+    # ── Health readings ──────────────────────────────────────
+    latest_bp = bp_status = bp_recorded_at = None
+    latest_sugar = sugar_status = sugar_recorded_at = None
+    latest_heart_rate = heart_rate_status = heart_rate_recorded_at = None
+
+    try:
+        from health.models import HealthReading
+
+        bp = HealthReading.objects.filter(
+            user=member_user, reading_type="bp"
+        ).order_by("-recorded_at").first()
+        if bp:
+            latest_bp = bp.value
+            bp_status = bp.status
+            bp_recorded_at = bp.recorded_at
+
+        sugar = HealthReading.objects.filter(
+            user=member_user, reading_type="sugar"
+        ).order_by("-recorded_at").first()
+        if sugar:
+            latest_sugar = sugar.value
+            sugar_status = sugar.status
+            sugar_recorded_at = sugar.recorded_at
+
+        hr = HealthReading.objects.filter(
+            user=member_user, reading_type="heartRate"
+        ).order_by("-recorded_at").first()
+        if hr:
+            try:
+                latest_heart_rate = int(float(hr.value))
+            except (ValueError, TypeError):
+                latest_heart_rate = None
+            heart_rate_status = hr.status
+            heart_rate_recorded_at = hr.recorded_at
+    except ImportError:
+        pass
+
+    # ── Medicine adherence ───────────────────────────────────
+    medicines_today_total = medicines_today_taken = 0
+    medicine_adherence_percent = 0.0
+
+    try:
+        from medicine.models import MedicineIntake
+        intakes = MedicineIntake.objects.filter(
+            medicine__user=member_user, scheduled_date=today
+        )
+        medicines_today_total = intakes.count()
+        medicines_today_taken = intakes.filter(status="taken").count()
+        if medicines_today_total > 0:
+            medicine_adherence_percent = round(
+                (medicines_today_taken / medicines_today_total) * 100, 1
+            )
+    except ImportError:
+        pass
+
+    # ── Water intake ─────────────────────────────────────────
+    water_glasses_today = 0
+    water_goal_today = 8
+
+    try:
+        from water.models import DailyWaterLog
+        wlog = DailyWaterLog.objects.filter(
+            user=member_user, date=today
+        ).first()
+        if wlog:
+            water_glasses_today = wlog.glasses
+            water_goal_today = wlog.goal_glasses
+    except ImportError:
+        pass
+
+    # ── Overall status ───────────────────────────────────────
+    indicators = [bp_status, sugar_status, heart_rate_status]
+    if "danger" in indicators:
+        overall_status = "danger"
+    elif "warning" in indicators:
+        overall_status = "warning"
+    else:
+        overall_status = "good"
+
+    activity_times = [t for t in [bp_recorded_at, sugar_recorded_at, heart_rate_recorded_at] if t]
+    last_activity = max(activity_times) if activity_times else None
+
+    return {
+        "latest_bp": latest_bp,
+        "bp_status": bp_status,
+        "bp_recorded_at": bp_recorded_at,
+        "latest_sugar": latest_sugar,
+        "sugar_status": sugar_status,
+        "sugar_recorded_at": sugar_recorded_at,
+        "latest_heart_rate": latest_heart_rate,
+        "heart_rate_status": heart_rate_status,
+        "heart_rate_recorded_at": heart_rate_recorded_at,
+        "medicines_today_total": medicines_today_total,
+        "medicines_today_taken": medicines_today_taken,
+        "medicine_adherence_percent": medicine_adherence_percent,
+        "water_glasses_today": water_glasses_today,
+        "water_goal_today": water_goal_today,
+        "overall_status": overall_status,
+        "last_activity": last_activity,
+    }
+
+
+# ─────────────────────────────────────────────────────────────
+# Views
+# ─────────────────────────────────────────────────────────────
+
+class CreateFamilyView(APIView):
+    """
+    POST /api/v1/family/create/
+    Create a new family group. The creator becomes admin.
+    """
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):
-        return FamilyLink.objects.filter(
-            child=self.request.user,
-            is_active=True
-        ).select_related("parent")
-
-
-class LinkParentView(APIView):
-    """
-    POST: Link to a parent using their unique link code.
-    """
-    permission_classes = [IsAuthenticated]
-    throttle_classes = [ScopedRateThrottle]
-    throttle_scope = "link_parent"
-
-    @extend_schema(request=LinkParentSerializer, responses={201: FamilyLinkSerializer})
+    @extend_schema(request=CreateFamilySerializer, responses={201: FamilySerializer})
     def post(self, request):
-        serializer = LinkParentSerializer(data=request.data)
+        # Check if user already belongs to a family
+        if FamilyMembership.objects.filter(user=request.user).exists():
+            return Response(
+                {"error": "You already belong to a family. Leave it first to create a new one."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = CreateFamilySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        link_code = serializer.validated_data["link_code"].upper()
-        relationship = serializer.validated_data.get("relationship", "other")
-
-        # Find the parent by link code
-        try:
-            parent = User.objects.get(parent_link_code=link_code)
-        except User.DoesNotExist:
-            return Response(
-                {"error": "Invalid link code."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Prevent self-linking
-        if parent == request.user:
-            return Response(
-                {"error": "You cannot link to yourself."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Check if already linked
-        existing = FamilyLink.objects.filter(
-            child=request.user,
-            parent=parent
-        ).first()
-
-        if existing:
-            if existing.is_active:
-                return Response(
-                    {"error": "You are already linked to this parent."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            else:
-                # Reactivate existing link
-                existing.is_active = True
-                existing.relationship = relationship
-                existing.save()
-                return Response(
-                    FamilyLinkSerializer(existing).data,
-                    status=status.HTTP_200_OK
-                )
-
-        # Create new link
-        link = FamilyLink.objects.create(
-            child=request.user,
-            parent=parent,
-            relationship=relationship,
-            is_active=True,
+        family = Family.objects.create(
+            name=serializer.validated_data["name"],
+            created_by=request.user,
+        )
+        FamilyMembership.objects.create(
+            family=family,
+            user=request.user,
+            role="admin",
         )
 
         return Response(
-            FamilyLinkSerializer(link).data,
-            status=status.HTTP_201_CREATED
+            FamilySerializer(family).data,
+            status=status.HTTP_201_CREATED,
         )
 
 
-class UnlinkParentView(APIView):
+class JoinFamilyView(APIView):
     """
-    POST: Unlink from a parent (deactivate the link).
-    """
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, parent_id):
-        try:
-            link = FamilyLink.objects.get(
-                child=request.user,
-                parent_id=parent_id,
-                is_active=True
-            )
-        except FamilyLink.DoesNotExist:
-            return Response(
-                {"error": "Link not found."},
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-        link.is_active = False
-        link.save()
-
-        return Response({"message": "Successfully unlinked."})
-
-
-class ParentHealthView(APIView):
-    """
-    GET: Get health summary for a linked parent.
-    Returns aggregated health data the child is allowed to see.
+    POST /api/v1/family/join/
+    Join a family using a 6-char invite code.
     """
     permission_classes = [IsAuthenticated]
 
-    @extend_schema(responses={200: ParentHealthSummarySerializer})
-    def get(self, request, parent_id):
-        # Verify link exists and is active
-        try:
-            link = FamilyLink.objects.select_related("parent").get(
-                child=request.user,
-                parent_id=parent_id,
-                is_active=True
-            )
-        except FamilyLink.DoesNotExist:
+    @extend_schema(request=JoinFamilySerializer, responses={200: FamilySerializer})
+    def post(self, request):
+        # Check if user already belongs to a family
+        if FamilyMembership.objects.filter(user=request.user).exists():
             return Response(
-                {"error": "You are not linked to this parent."},
-                status=status.HTTP_403_FORBIDDEN
+                {"error": "You already belong to a family. Leave it first to join another."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        parent = link.parent
-        today = timezone.localdate()
+        serializer = JoinFamilySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
 
-        # Get latest health readings
-        latest_bp = None
-        bp_status = None
-        bp_recorded_at = None
-        latest_sugar = None
-        sugar_status = None
-        sugar_recorded_at = None
-        latest_heart_rate = None
-        heart_rate_status = None
-        heart_rate_recorded_at = None
-
-        # Try to get health readings if health app exists
-        try:
-            from health.models import HealthReading
-
-            bp_reading = HealthReading.objects.filter(
-                user=parent, reading_type="bp"
-            ).order_by("-recorded_at").first()
-            if bp_reading:
-                latest_bp = bp_reading.value
-                bp_status = bp_reading.status
-                bp_recorded_at = bp_reading.recorded_at
-
-            sugar_reading = HealthReading.objects.filter(
-                user=parent, reading_type="sugar"
-            ).order_by("-recorded_at").first()
-            if sugar_reading:
-                latest_sugar = sugar_reading.value
-                sugar_status = sugar_reading.status
-                sugar_recorded_at = sugar_reading.recorded_at
-
-            hr_reading = HealthReading.objects.filter(
-                user=parent, reading_type="heartRate"
-            ).order_by("-recorded_at").first()
-            if hr_reading:
-                try:
-                    latest_heart_rate = int(float(hr_reading.value))
-                except (ValueError, TypeError):
-                    latest_heart_rate = None
-                heart_rate_status = hr_reading.status
-                heart_rate_recorded_at = hr_reading.recorded_at
-        except ImportError:
-            pass
-
-        # Get medicine adherence
-        medicines_today_total = 0
-        medicines_today_taken = 0
-        medicine_adherence_percent = 0.0
+        code = serializer.validated_data["invite_code"]
+        nickname = serializer.validated_data.get("nickname", "")
 
         try:
-            from medicine.models import MedicineIntake
-
-            today_intakes = MedicineIntake.objects.filter(
-                medicine__user=parent,
-                scheduled_date=today
+            family = Family.objects.get(invite_code=code)
+        except Family.DoesNotExist:
+            return Response(
+                {"error": "Invalid invite code."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-            medicines_today_total = today_intakes.count()
-            medicines_today_taken = today_intakes.filter(status="taken").count()
-            if medicines_today_total > 0:
-                medicine_adherence_percent = round(
-                    (medicines_today_taken / medicines_today_total) * 100, 1
-                )
-        except ImportError:
-            pass
 
-        # Get water intake
-        water_glasses_today = 0
-        water_goal_today = 8
+        if family.is_full:
+            return Response(
+                {"error": f"This family already has {family.max_members} members (maximum)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        FamilyMembership.objects.create(
+            family=family,
+            user=request.user,
+            role="member",
+            nickname=nickname,
+        )
+
+        return Response(FamilySerializer(family).data, status=status.HTTP_200_OK)
+
+
+class MyFamilyView(APIView):
+    """
+    GET /api/v1/family/
+    Get the current user's family with all members.
+    Returns 404 if the user is not in any family.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: FamilySerializer})
+    def get(self, request):
+        try:
+            membership = FamilyMembership.objects.select_related("family").get(
+                user=request.user
+            )
+        except FamilyMembership.DoesNotExist:
+            return Response(
+                {"error": "You are not part of any family yet.", "has_family": False},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return Response({
+            **FamilySerializer(membership.family).data,
+            "my_role": membership.role,
+            "my_nickname": membership.nickname,
+            "has_family": True,
+        })
+
+
+class LeaveFamilyView(APIView):
+    """
+    POST /api/v1/family/leave/
+    Leave the current family.
+    Admin can only leave if they are the last member (or transfer is handled).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            membership = FamilyMembership.objects.select_related("family").get(
+                user=request.user
+            )
+        except FamilyMembership.DoesNotExist:
+            return Response(
+                {"error": "You are not part of any family."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        family = membership.family
+        remaining = family.memberships.exclude(user=request.user)
+
+        if membership.role == "admin" and remaining.exists():
+            # Transfer admin to the oldest remaining member
+            new_admin = remaining.order_by("joined_at").first()
+            new_admin.role = "admin"
+            new_admin.save(update_fields=["role"])
+
+        membership.delete()
+
+        # If no members left, delete the family
+        if not remaining.exists():
+            family.delete()
+
+        return Response({"message": "You have left the family."})
+
+
+class RemoveMemberView(APIView):
+    """
+    POST /api/v1/family/remove/<member_id>/
+    Admin-only: remove a member from the family.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, member_id):
+        try:
+            my_membership = FamilyMembership.objects.select_related("family").get(
+                user=request.user
+            )
+        except FamilyMembership.DoesNotExist:
+            return Response(
+                {"error": "You are not part of any family."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if my_membership.role != "admin":
+            return Response(
+                {"error": "Only the family admin can remove members."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         try:
-            from water.models import DailyWaterLog
+            target = FamilyMembership.objects.get(
+                family=my_membership.family,
+                user_id=member_id,
+            )
+        except FamilyMembership.DoesNotExist:
+            return Response(
+                {"error": "Member not found in your family."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
-            water_log = DailyWaterLog.objects.filter(
-                user=parent,
-                date=today
-            ).first()
-            if water_log:
-                water_glasses_today = water_log.glasses
-                water_goal_today = water_log.goal_glasses
-        except ImportError:
-            pass
+        if target.user == request.user:
+            return Response(
+                {"error": "You cannot remove yourself. Use the leave endpoint."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        # Determine overall status
-        danger_indicators = [bp_status, sugar_status, heart_rate_status]
-        if "danger" in danger_indicators:
-            overall_status = "danger"
-        elif "warning" in danger_indicators:
-            overall_status = "warning"
-        else:
-            overall_status = "good"
+        target.delete()
+        return Response({"message": "Member removed from family."})
 
-        # Find last activity
-        last_activity = None
-        activity_times = [t for t in [bp_recorded_at, sugar_recorded_at, heart_rate_recorded_at] if t]
-        if activity_times:
-            last_activity = max(activity_times)
+
+class RegenerateInviteCodeView(APIView):
+    """
+    POST /api/v1/family/regenerate-code/
+    Admin-only: regenerate the family invite code.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            membership = FamilyMembership.objects.select_related("family").get(
+                user=request.user
+            )
+        except FamilyMembership.DoesNotExist:
+            return Response(
+                {"error": "You are not part of any family."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if membership.role != "admin":
+            return Response(
+                {"error": "Only the family admin can regenerate the invite code."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        new_code = membership.family.regenerate_invite_code()
+        return Response({
+            "invite_code": new_code,
+            "message": "Invite code regenerated. Share the new code with family.",
+        })
+
+
+class FamilyMemberHealthView(APIView):
+    """
+    GET /api/v1/family/members/<member_id>/health/
+    View any family member's health summary.
+    Both users must be in the same family.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: FamilyMemberHealthSummarySerializer})
+    def get(self, request, member_id):
+        # Verify requester is in a family
+        try:
+            my_membership = FamilyMembership.objects.select_related("family").get(
+                user=request.user
+            )
+        except FamilyMembership.DoesNotExist:
+            return Response(
+                {"error": "You are not part of any family."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Verify target member is in the same family
+        try:
+            target_membership = FamilyMembership.objects.select_related("user").get(
+                family=my_membership.family,
+                user_id=member_id,
+            )
+        except FamilyMembership.DoesNotExist:
+            return Response(
+                {"error": "This person is not in your family."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        member = target_membership.user
+        health = _get_member_health_data(member)
 
         data = {
-            "parent_id": parent.id,
-            "parent_name": parent.get_full_name() or parent.email,
-            "relationship": link.get_relationship_display(),
-            "latest_bp": latest_bp,
-            "bp_status": bp_status,
-            "bp_recorded_at": bp_recorded_at,
-            "latest_sugar": latest_sugar,
-            "sugar_status": sugar_status,
-            "sugar_recorded_at": sugar_recorded_at,
-            "latest_heart_rate": latest_heart_rate,
-            "heart_rate_status": heart_rate_status,
-            "heart_rate_recorded_at": heart_rate_recorded_at,
-            "medicines_today_total": medicines_today_total,
-            "medicines_today_taken": medicines_today_taken,
-            "medicine_adherence_percent": medicine_adherence_percent,
-            "water_glasses_today": water_glasses_today,
-            "water_goal_today": water_goal_today,
-            "overall_status": overall_status,
-            "last_activity": last_activity,
+            "member_id": member.id,
+            "member_name": member.get_full_name() or member.email,
+            "nickname": target_membership.nickname,
+            **health,
         }
 
         return Response(data)
 
 
-class MyLinkCodeView(APIView):
+class FamilyPlanView(APIView):
     """
-    GET: Get current user's link code (for sharing with children).
-    POST: Regenerate link code.
+    GET /api/v1/family/plan/
+    Returns all available plans with pricing info.
     """
     permission_classes = [IsAuthenticated]
-    throttle_classes = [ScopedRateThrottle]
-    throttle_scope = "link_code_regenerate"
 
     def get(self, request):
+        plans = [
+            {
+                "id": "free",
+                "name": "Free",
+                "price": 0,
+                "currency": "INR",
+                "max_members": 4,
+                "features": [
+                    "Up to 4 family members",
+                    "Health tracking for all",
+                    "Medicine reminders",
+                    "Family health dashboard",
+                ],
+            },
+            {
+                "id": "plus",
+                "name": "Plus",
+                "price": 99,
+                "currency": "INR",
+                "period": "month",
+                "max_members": 6,
+                "features": [
+                    "Up to 6 family members",
+                    "Everything in Free",
+                    "Priority AI health assistant",
+                    "Advanced health analytics",
+                ],
+            },
+            {
+                "id": "premium",
+                "name": "Premium",
+                "price": 199,
+                "currency": "INR",
+                "period": "month",
+                "max_members": 10,
+                "features": [
+                    "Up to 10 family members",
+                    "Everything in Plus",
+                    "Doctor consultation credits",
+                    "Family health reports",
+                    "Priority support",
+                ],
+            },
+        ]
+
+        # Include current plan if user has a family
+        current_plan = None
+        try:
+            membership = FamilyMembership.objects.select_related("family").get(
+                user=request.user
+            )
+            current_plan = membership.family.plan
+        except FamilyMembership.DoesNotExist:
+            pass
+
         return Response({
-            "link_code": request.user.parent_link_code,
-            "linked_children_count": FamilyLink.objects.filter(
-                parent=request.user,
-                is_active=True
-            ).count(),
+            "plans": plans,
+            "current_plan": current_plan,
         })
 
+
+class UpgradePlanView(APIView):
+    """
+    POST /api/v1/family/upgrade/
+    Admin-only: upgrade the family plan.
+    """
+    permission_classes = [IsAuthenticated]
+
     def post(self, request):
-        new_code = request.user.regenerate_link_code()
+        try:
+            membership = FamilyMembership.objects.select_related("family").get(
+                user=request.user
+            )
+        except FamilyMembership.DoesNotExist:
+            return Response(
+                {"error": "You are not part of any family."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if membership.role != "admin":
+            return Response(
+                {"error": "Only the family admin can upgrade the plan."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = UpgradePlanSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        new_plan = serializer.validated_data["plan"]
+        family = membership.family
+
+        if new_plan == family.plan:
+            return Response(
+                {"error": f"You are already on the {new_plan} plan."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        family.plan = new_plan
+        family.save()  # auto-syncs max_members
+
         return Response({
-            "link_code": new_code,
-            "message": "Link code regenerated successfully.",
+            "message": f"Plan upgraded to {new_plan.title()}.",
+            "family": FamilySerializer(family).data,
         })
