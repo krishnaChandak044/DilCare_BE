@@ -17,6 +17,11 @@ from .models import (
     CommunityGroup, GroupMembership,
     Challenge, ChallengeParticipant,
     CommunityNotification,
+    CommunityPost, CommunityPostReaction, CommunityPostComment,
+    GroupChatMessage,
+    CommunityBadge, UserBadge,
+    UserCommunityPreference, GroupNotificationPreference,
+    CommunityModerationReport, GroupChatReadState,
 )
 from .serializers import (
     CommunityGroupSerializer, CreateGroupSerializer, JoinGroupSerializer,
@@ -24,6 +29,13 @@ from .serializers import (
     ChallengeSerializer, CreateChallengeSerializer, ChallengeParticipantSerializer,
     LeaderboardSerializer,
     CommunityNotificationSerializer,
+    CommunityPostSerializer, CreateCommunityPostSerializer,
+    CommunityPostCommentSerializer, CreateCommunityPostCommentSerializer,
+    GroupChatMessageSerializer, CreateGroupChatMessageSerializer,
+    UserBadgeSerializer,
+    UserCommunityPreferenceSerializer, GroupNotificationPreferenceSerializer,
+    CommunityModerationReportSerializer, CreateCommunityModerationReportSerializer,
+    GroupRoleUpdateSerializer, GroupChatUnreadSerializer,
 )
 
 User = get_user_model()
@@ -44,6 +56,128 @@ def can_view_challenge(user, challenge):
         challenge=challenge,
         user=user,
     ).exists()
+
+
+def should_send_notification(user, group=None):
+    preference = UserCommunityPreference.objects.filter(user=user).first()
+    if preference and preference.mute_all:
+        return False
+
+    if preference and preference.quiet_hours_enabled and preference.quiet_hours_start and preference.quiet_hours_end:
+        current_time = timezone.localtime().time()
+        start = preference.quiet_hours_start
+        end = preference.quiet_hours_end
+        if start <= end:
+            if start <= current_time <= end:
+                return False
+        else:
+            if current_time >= start or current_time <= end:
+                return False
+
+    if group is not None:
+        group_pref = GroupNotificationPreference.objects.filter(user=user, group=group).first()
+        if group_pref and group_pref.is_muted:
+            return False
+
+    return True
+
+
+def create_community_notification(*, user, notification_type, title, message='', related_group=None, related_challenge=None):
+    if not should_send_notification(user, group=related_group):
+        return None
+
+    return CommunityNotification.objects.create(
+        user=user,
+        notification_type=notification_type,
+        title=title,
+        message=message,
+        related_group=related_group,
+        related_challenge=related_challenge,
+    )
+
+
+def award_badge(user, badge_code, challenge=None):
+    badge, _ = CommunityBadge.objects.get_or_create(
+        code=badge_code,
+        defaults={
+            'title': badge_code.replace('_', ' ').title(),
+            'description': 'Community achievement unlocked.',
+            'badge_type': 'milestone',
+            'icon': 'trophy',
+            'color': '#F59E0B',
+        },
+    )
+
+    award, created = UserBadge.objects.get_or_create(
+        user=user,
+        badge=badge,
+        challenge=challenge,
+    )
+    return award if created else None
+
+
+def generate_user_milestone_posts(user):
+    created_posts = []
+    today = timezone.localdate()
+
+    from steps.models import DailyStepLog
+    from water.models import DailyWaterLog
+    from medicine.models import MedicineIntake
+
+    milestones = []
+
+    step_today = DailyStepLog.objects.filter(user=user, date=today).first()
+    if step_today and step_today.total_steps:
+        for threshold in [5000, 10000, 20000]:
+            if step_today.total_steps >= threshold:
+                milestones.append(('steps', threshold, f"I reached {threshold:,} steps today! 🚶"))
+
+    water_today = DailyWaterLog.objects.filter(user=user, date=today).first()
+    if water_today and water_today.glasses:
+        for threshold in [4, 8, 12]:
+            if water_today.glasses >= threshold:
+                milestones.append(('water', threshold, f"Hydration milestone: {threshold} glasses today! 💧"))
+
+    taken_today = MedicineIntake.objects.filter(
+        medicine__user=user,
+        scheduled_date=today,
+        status='taken',
+    ).count()
+    if taken_today >= 1:
+        milestones.append(('medicine', taken_today, f"Completed {taken_today} medicine doses today ✅"))
+
+    for milestone_type, milestone_value, content in milestones:
+        exists = CommunityPost.objects.filter(
+            user=user,
+            post_type='milestone',
+            milestone_type=milestone_type,
+            milestone_value=milestone_value,
+            created_at__date=today,
+            is_deleted=False,
+        ).exists()
+        if exists:
+            continue
+
+        post = CommunityPost.objects.create(
+            user=user,
+            content=content,
+            post_type='milestone',
+            milestone_type=milestone_type,
+            milestone_value=milestone_value,
+        )
+        created_posts.append(post)
+
+        badge_code = f"milestone_{milestone_type}_{milestone_value}"
+        award = award_badge(user, badge_code)
+        if award:
+            create_community_notification(
+                user=user,
+                notification_type='achievement',
+                title='New badge unlocked!',
+                message=f"You earned the {award.badge.title} badge.",
+            )
+
+    return created_posts
 
 
 # LEADERBOARD — Computed from Steps DailyStepLog
@@ -280,6 +414,79 @@ class GroupMembersView(APIView):
         return Response(serializer.data)
 
 
+class GroupRoleUpdateView(APIView):
+    """
+    POST: Update a member role in a group (admin only).
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=GroupRoleUpdateSerializer, responses={200: GroupMemberSerializer})
+    def post(self, request, pk):
+        admin_membership = GroupMembership.objects.filter(
+            user=request.user, group_id=pk, is_active=True, role='admin'
+        ).first()
+        if not admin_membership:
+            return Response({'error': 'Only admins can update roles.'}, status=status.HTTP_403_FORBIDDEN)
+
+        serializer = GroupRoleUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        membership = GroupMembership.objects.filter(
+            group_id=pk,
+            user_id=serializer.validated_data['member_id'],
+            is_active=True,
+        ).select_related('user').first()
+        if not membership:
+            return Response({'error': 'Member not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        membership.role = serializer.validated_data['role']
+        membership.save(update_fields=['role', 'updated_at'])
+
+        return Response(GroupMemberSerializer(membership).data)
+
+
+class GroupMemberRemoveView(APIView):
+    """
+    POST: Remove a member from a group (admin/moderator, or self-leave).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk, member_id):
+        actor_membership = GroupMembership.objects.filter(
+            group_id=pk, user=request.user, is_active=True,
+        ).first()
+        if not actor_membership:
+            return Response({'error': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
+
+        target_membership = GroupMembership.objects.filter(
+            group_id=pk, user_id=member_id, is_active=True,
+        ).first()
+        if not target_membership:
+            return Response({'error': 'Member not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        can_remove = (
+            request.user.id == target_membership.user_id
+            or actor_membership.role == 'admin'
+            or (actor_membership.role == 'moderator' and target_membership.role == 'member')
+        )
+        if not can_remove:
+            return Response({'error': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if target_membership.role == 'admin':
+            remaining_admins = GroupMembership.objects.filter(
+                group_id=pk, role='admin', is_active=True,
+            ).exclude(user_id=target_membership.user_id).count()
+            if remaining_admins == 0:
+                return Response(
+                    {'error': 'Cannot remove the last admin from group.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        target_membership.is_active = False
+        target_membership.save(update_fields=['is_active', 'updated_at'])
+        return Response({'message': 'Member removed successfully.'})
+
+
 class JoinGroupView(APIView):
     """
     POST: Join a group (public groups directly, private via invite code).
@@ -292,7 +499,7 @@ class JoinGroupView(APIView):
             data=request.data, context={'request': request}
         )
         serializer.is_valid(raise_exception=True)
-        group = serializer.group
+        group = serializer.validated_data['group']
 
         membership, created = GroupMembership.objects.get_or_create(
             user=request.user, group=group,
@@ -303,7 +510,7 @@ class JoinGroupView(APIView):
             membership.save(update_fields=['is_active'])
 
         # Send notification to group admin
-        CommunityNotification.objects.create(
+        create_community_notification(
             user=group.created_by,
             notification_type='group_joined',
             title=f'{request.user.get_full_name() or request.user.email} joined {group.name}',
@@ -503,6 +710,9 @@ class JoinChallengeView(APIView):
         # Compute initial progress
         participant.refresh_progress()
 
+        if challenge.status == 'active':
+            award_badge(request.user, 'challenge_joiner')
+
         return Response(
             ChallengeSerializer(challenge, context={'request': request}).data,
             status=status.HTTP_201_CREATED,
@@ -586,6 +796,17 @@ class RefreshChallengeProgressView(APIView):
             )
 
         progress = participant.refresh_progress()
+        if participant.is_completed:
+            award = award_badge(request.user, 'challenge_complete', challenge=participant.challenge)
+            if award:
+                create_community_notification(
+                    user=request.user,
+                    notification_type='challenge_completed',
+                    title='Challenge completed!',
+                    message=f"You completed {participant.challenge.title}.",
+                    related_challenge=participant.challenge,
+                )
+
         return Response({
             'challenge_id': str(pk),
             'cached_progress': progress,
@@ -669,3 +890,400 @@ class UnreadNotificationCountView(APIView):
             user=request.user, is_read=False
         ).count()
         return Response({"unread_count": count})
+
+
+class UserCommunityPreferenceView(APIView):
+    """
+    GET/PATCH: View or update current user's smart notification preferences.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: UserCommunityPreferenceSerializer})
+    def get(self, request):
+        preference, _ = UserCommunityPreference.objects.get_or_create(user=request.user)
+        return Response(UserCommunityPreferenceSerializer(preference).data)
+
+    @extend_schema(request=UserCommunityPreferenceSerializer, responses={200: UserCommunityPreferenceSerializer})
+    def patch(self, request):
+        preference, _ = UserCommunityPreference.objects.get_or_create(user=request.user)
+        serializer = UserCommunityPreferenceSerializer(preference, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class GroupNotificationPreferenceView(APIView):
+    """
+    GET: List my group notification preferences.
+    POST: Upsert mute setting for a group.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: GroupNotificationPreferenceSerializer(many=True)})
+    def get(self, request):
+        prefs = GroupNotificationPreference.objects.filter(user=request.user).select_related('group')
+        return Response(GroupNotificationPreferenceSerializer(prefs, many=True).data)
+
+    @extend_schema(
+        request=GroupNotificationPreferenceSerializer,
+        responses={200: GroupNotificationPreferenceSerializer},
+    )
+    def post(self, request):
+        group_id = request.data.get('group')
+        is_muted = bool(request.data.get('is_muted', False))
+        membership_exists = GroupMembership.objects.filter(
+            user=request.user, group_id=group_id, is_active=True,
+        ).exists()
+        if not membership_exists:
+            return Response({'error': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
+
+        pref, _ = GroupNotificationPreference.objects.get_or_create(
+            user=request.user,
+            group_id=group_id,
+            defaults={'is_muted': is_muted},
+        )
+        pref.is_muted = is_muted
+        pref.save(update_fields=['is_muted', 'updated_at'])
+        return Response(GroupNotificationPreferenceSerializer(pref).data)
+
+
+class UserBadgeListView(APIView):
+    """
+    GET: List badges awarded to current user.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: UserBadgeSerializer(many=True)})
+    def get(self, request):
+        badges = UserBadge.objects.filter(user=request.user).select_related('badge', 'challenge')[:100]
+        return Response(UserBadgeSerializer(badges, many=True).data)
+
+
+class MilestoneSyncView(APIView):
+    """
+    POST: Generate today's milestone feed posts from steps/water/medicine logs.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        created_posts = generate_user_milestone_posts(request.user)
+        return Response({
+            'created_count': len(created_posts),
+            'created_post_ids': [str(post.id) for post in created_posts],
+        })
+
+
+class ModerationReportListCreateView(APIView):
+    """
+    GET: List my moderation reports.
+    POST: Submit a moderation report.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: CommunityModerationReportSerializer(many=True)})
+    def get(self, request):
+        reports = CommunityModerationReport.objects.filter(reported_by=request.user)[:100]
+        return Response(CommunityModerationReportSerializer(reports, many=True).data)
+
+    @extend_schema(request=CreateCommunityModerationReportSerializer, responses={201: CommunityModerationReportSerializer})
+    def post(self, request):
+        serializer = CreateCommunityModerationReportSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        report = CommunityModerationReport.objects.create(
+            reported_by=request.user,
+            **serializer.validated_data,
+        )
+        return Response(CommunityModerationReportSerializer(report).data, status=status.HTTP_201_CREATED)
+
+
+# ═════════════════════════════════════════════════════════════════════
+# FEED
+# ═════════════════════════════════════════════════════════════════════
+
+class FeedListCreateView(APIView):
+    """
+    GET: List feed posts (global + groups user belongs to).
+    POST: Create a new feed post.
+    Query params:
+      - group: UUID to filter posts by group
+            - sort: latest | trending
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(name='group', type=str, required=False),
+            OpenApiParameter(name='sort', type=str, required=False, enum=['latest', 'trending']),
+        ],
+        responses={200: CommunityPostSerializer(many=True)},
+    )
+    def get(self, request):
+        my_group_ids = GroupMembership.objects.filter(
+            user=request.user, is_active=True
+        ).values_list('group_id', flat=True)
+
+        qs = CommunityPost.objects.filter(
+            Q(group__isnull=True) | Q(group_id__in=my_group_ids)
+        ).select_related('user', 'group')
+
+        group_id = request.query_params.get('group')
+        if group_id:
+            qs = qs.filter(group_id=group_id)
+
+        sort_by = request.query_params.get('sort', 'latest')
+        if sort_by == 'trending':
+            qs = qs.annotate(
+                active_like_count=Count('reactions', filter=Q(reactions__is_active=True), distinct=True),
+                active_comment_count=Count('comments', filter=Q(comments__is_deleted=False), distinct=True),
+            ).order_by('-active_like_count', '-active_comment_count', '-created_at')
+        else:
+            qs = qs.order_by('-created_at')
+
+        serializer = CommunityPostSerializer(qs[:50], many=True, context={'request': request})
+        return Response(serializer.data)
+
+    @extend_schema(request=CreateCommunityPostSerializer, responses={201: CommunityPostSerializer})
+    def post(self, request):
+        serializer = CreateCommunityPostSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        group = serializer.validated_data.get('group')
+
+        if group:
+            is_member = GroupMembership.objects.filter(
+                user=request.user, group=group, is_active=True
+            ).exists()
+            if not is_member:
+                return Response(
+                    {"error": "You must be a member of the group to post."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        post = CommunityPost.objects.create(
+            user=request.user,
+            group=group,
+            content=serializer.validated_data['content'],
+        )
+        return Response(
+            CommunityPostSerializer(post, context={'request': request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class FeedLikeToggleView(APIView):
+    """POST: Toggle like for a feed post."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            post = CommunityPost.objects.select_related('group').get(pk=pk)
+        except CommunityPost.DoesNotExist:
+            return Response({"error": "Post not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if post.group_id:
+            is_member = GroupMembership.objects.filter(
+                user=request.user, group_id=post.group_id, is_active=True
+            ).exists()
+            if not is_member:
+                return Response({"error": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
+
+        reaction, created = CommunityPostReaction.objects.get_or_create(
+            user=request.user,
+            post=post,
+            defaults={'is_active': True},
+        )
+        if created:
+            liked = True
+        elif not reaction.is_active:
+            reaction.is_active = True
+            reaction.save(update_fields=['is_active', 'updated_at'])
+            liked = True
+        else:
+            reaction.is_active = False
+            reaction.save(update_fields=['is_active', 'updated_at'])
+            liked = False
+
+        return Response({
+            'post_id': str(post.id),
+            'liked': liked,
+            'likes_count': post.reactions.filter(is_active=True).count(),
+        })
+
+
+class FeedCommentListCreateView(APIView):
+    """
+    GET: List comments for a post.
+    POST: Add a comment to a post.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: CommunityPostCommentSerializer(many=True)})
+    def get(self, request, pk):
+        try:
+            post = CommunityPost.objects.select_related('group').get(pk=pk)
+        except CommunityPost.DoesNotExist:
+            return Response({"error": "Post not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if post.group_id:
+            is_member = GroupMembership.objects.filter(
+                user=request.user, group_id=post.group_id, is_active=True
+            ).exists()
+            if not is_member:
+                return Response({"error": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
+
+        comments = post.comments.select_related('user').filter(is_deleted=False)
+        serializer = CommunityPostCommentSerializer(comments, many=True)
+        return Response(serializer.data)
+
+    @extend_schema(request=CreateCommunityPostCommentSerializer, responses={201: CommunityPostCommentSerializer})
+    def post(self, request, pk):
+        try:
+            post = CommunityPost.objects.select_related('group').get(pk=pk)
+        except CommunityPost.DoesNotExist:
+            return Response({"error": "Post not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if post.group_id:
+            is_member = GroupMembership.objects.filter(
+                user=request.user, group_id=post.group_id, is_active=True
+            ).exists()
+            if not is_member:
+                return Response({"error": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
+
+        serializer = CreateCommunityPostCommentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        comment = CommunityPostComment.objects.create(
+            user=request.user,
+            post=post,
+            content=serializer.validated_data['content'],
+        )
+        return Response(
+            CommunityPostCommentSerializer(comment).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+# ═════════════════════════════════════════════════════════════════════
+# GROUP CHAT
+# ═════════════════════════════════════════════════════════════════════
+
+class GroupChatView(APIView):
+    """
+    GET: List group chat messages.
+    POST: Send a group chat message.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _get_group_if_member(self, user, group_id):
+        try:
+            group = CommunityGroup.objects.get(pk=group_id, deleted_at__isnull=True)
+        except CommunityGroup.DoesNotExist:
+            return None, Response({"error": "Group not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        is_member = GroupMembership.objects.filter(
+            user=user, group=group, is_active=True
+        ).exists()
+        if not is_member:
+            return None, Response({"error": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
+
+        return group, None
+
+    @extend_schema(responses={200: GroupChatMessageSerializer(many=True)})
+    def get(self, request, pk):
+        group, error = self._get_group_if_member(request.user, pk)
+        if error:
+            return error
+
+        messages = GroupChatMessage.objects.filter(group=group).select_related('user').order_by('created_at')[:100]
+        last_message = messages.last()
+        if last_message:
+            GroupChatReadState.objects.update_or_create(
+                user=request.user,
+                group=group,
+                defaults={
+                    'last_seen_message': last_message,
+                    'last_seen_at': timezone.now(),
+                },
+            )
+        serializer = GroupChatMessageSerializer(messages, many=True)
+        return Response(serializer.data)
+
+    @extend_schema(request=CreateGroupChatMessageSerializer, responses={201: GroupChatMessageSerializer})
+    def post(self, request, pk):
+        group, error = self._get_group_if_member(request.user, pk)
+        if error:
+            return error
+
+        serializer = CreateGroupChatMessageSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        message = GroupChatMessage.objects.create(
+            group=group,
+            user=request.user,
+            content=serializer.validated_data['content'],
+        )
+
+        GroupChatReadState.objects.update_or_create(
+            user=request.user,
+            group=group,
+            defaults={
+                'last_seen_message': message,
+                'last_seen_at': timezone.now(),
+            },
+        )
+
+        import re
+
+        mentions = re.findall(r'@([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})', message.content or '')
+        if mentions:
+            mentioned_users = User.objects.filter(email__in=mentions).exclude(id=request.user.id)
+            member_user_ids = set(
+                GroupMembership.objects.filter(group=group, is_active=True).values_list('user_id', flat=True)
+            )
+            for target_user in mentioned_users:
+                if target_user.id in member_user_ids:
+                    create_community_notification(
+                        user=target_user,
+                        notification_type='general',
+                        title='You were mentioned in group chat',
+                        message=f"{request.user.get_full_name() or request.user.email}: {message.content[:120]}",
+                        related_group=group,
+                    )
+
+        return Response(GroupChatMessageSerializer(message).data, status=status.HTTP_201_CREATED)
+
+
+class GroupChatUnreadView(APIView):
+    """
+    GET: Unread chat counts for all groups of current user.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: GroupChatUnreadSerializer(many=True)})
+    def get(self, request):
+        memberships = GroupMembership.objects.filter(user=request.user, is_active=True).values_list('group_id', flat=True)
+        payload = []
+        for group_id in memberships:
+            last_message = GroupChatMessage.objects.filter(group_id=group_id, is_deleted=False).order_by('-created_at').first()
+            read_state = GroupChatReadState.objects.filter(user=request.user, group_id=group_id).first()
+            if not last_message:
+                payload.append({
+                    'group_id': group_id,
+                    'unread_count': 0,
+                    'last_seen_message_id': None,
+                    'has_unread': False,
+                })
+                continue
+
+            unread_qs = GroupChatMessage.objects.filter(group_id=group_id, is_deleted=False)
+            if read_state and read_state.last_seen_message_id:
+                unread_qs = unread_qs.filter(created_at__gt=read_state.last_seen_message.created_at)
+
+            unread_count = unread_qs.count()
+            payload.append({
+                'group_id': group_id,
+                'unread_count': unread_count,
+                'last_seen_message_id': str(read_state.last_seen_message_id) if read_state and read_state.last_seen_message_id else None,
+                'has_unread': unread_count > 0,
+            })
+
+        serializer = GroupChatUnreadSerializer(payload, many=True)
+        return Response(serializer.data)

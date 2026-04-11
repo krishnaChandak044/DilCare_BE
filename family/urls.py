@@ -1,31 +1,37 @@
 """
-Family — URL routes for family linking endpoints.
+Family — URL routes for family group endpoints.
 """
 from django.urls import path
 
 from .views import (
-    LinkedParentsListView,
-    LinkParentView,
-    UnlinkParentView,
-    ParentHealthView,
-    MyLinkCodeView,
+    CreateFamilyView,
+    JoinFamilyView,
+    MyFamilyView,
+    LeaveFamilyView,
+    RemoveMemberView,
+    RegenerateInviteCodeView,
+    FamilyMemberHealthView,
+    FamilyPlanView,
+    UpgradePlanView,
 )
 
 app_name = "family"
 
 urlpatterns = [
-    # Parents linked to current user (child)
-    path("parents/", LinkedParentsListView.as_view(), name="linked-parents"),
-    
-    # Link to a parent via code
-    path("link/", LinkParentView.as_view(), name="link-parent"),
-    
-    # Unlink from a parent
-    path("unlink/<uuid:parent_id>/", UnlinkParentView.as_view(), name="unlink-parent"),
-    
-    # Get parent's health summary
-    path("parents/<uuid:parent_id>/health/", ParentHealthView.as_view(), name="parent-health"),
-    
-    # Current user's link code (for sharing)
-    path("my-code/", MyLinkCodeView.as_view(), name="my-link-code"),
+    # Family CRUD
+    path("", MyFamilyView.as_view(), name="my-family"),
+    path("create/", CreateFamilyView.as_view(), name="create-family"),
+    path("join/", JoinFamilyView.as_view(), name="join-family"),
+    path("leave/", LeaveFamilyView.as_view(), name="leave-family"),
+
+    # Plan management
+    path("plan/", FamilyPlanView.as_view(), name="family-plan"),
+    path("upgrade/", UpgradePlanView.as_view(), name="upgrade-plan"),
+
+    # Admin actions
+    path("remove/<int:member_id>/", RemoveMemberView.as_view(), name="remove-member"),
+    path("regenerate-code/", RegenerateInviteCodeView.as_view(), name="regenerate-code"),
+
+    # View any family member's health
+    path("members/<int:member_id>/health/", FamilyMemberHealthView.as_view(), name="member-health"),
 ]
