@@ -6,6 +6,11 @@ from .models import (
     CommunityGroup, GroupMembership,
     Challenge, ChallengeParticipant,
     CommunityNotification,
+    CommunityPost, CommunityPostReaction, CommunityPostComment,
+    GroupChatMessage,
+    CommunityBadge, UserBadge,
+    UserCommunityPreference, GroupNotificationPreference,
+    CommunityModerationReport, GroupChatReadState,
 )
 
 
@@ -126,3 +131,83 @@ class CommunityNotificationAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
+
+
+@admin.register(CommunityPost)
+class CommunityPostAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'group', 'created_at')
+    list_filter = ('group', 'created_at')
+    search_fields = ('user__email', 'content', 'group__name')
+    raw_id_fields = ('user', 'group')
+    readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(CommunityPostReaction)
+class CommunityPostReactionAdmin(admin.ModelAdmin):
+    list_display = ('post', 'user', 'is_active', 'created_at')
+    list_filter = ('is_active', 'created_at')
+    search_fields = ('user__email', 'post__content')
+    raw_id_fields = ('user', 'post')
+
+
+@admin.register(CommunityPostComment)
+class CommunityPostCommentAdmin(admin.ModelAdmin):
+    list_display = ('post', 'user', 'created_at')
+    list_filter = ('created_at',)
+    search_fields = ('user__email', 'content')
+    raw_id_fields = ('user', 'post')
+    readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(GroupChatMessage)
+class GroupChatMessageAdmin(admin.ModelAdmin):
+    list_display = ('group', 'user', 'created_at')
+    list_filter = ('group', 'created_at')
+    search_fields = ('group__name', 'user__email', 'content')
+    raw_id_fields = ('group', 'user')
+    readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(CommunityBadge)
+class CommunityBadgeAdmin(admin.ModelAdmin):
+    list_display = ('code', 'title', 'badge_type')
+    list_filter = ('badge_type',)
+    search_fields = ('code', 'title')
+
+
+@admin.register(UserBadge)
+class UserBadgeAdmin(admin.ModelAdmin):
+    list_display = ('user', 'badge', 'challenge', 'created_at')
+    search_fields = ('user__email', 'badge__code', 'badge__title')
+    list_filter = ('badge__badge_type', 'created_at')
+    raw_id_fields = ('user', 'badge', 'challenge')
+    readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(UserCommunityPreference)
+class UserCommunityPreferenceAdmin(admin.ModelAdmin):
+    list_display = ('user', 'mute_all', 'digest_only', 'quiet_hours_enabled')
+    search_fields = ('user__email',)
+    raw_id_fields = ('user',)
+
+
+@admin.register(GroupNotificationPreference)
+class GroupNotificationPreferenceAdmin(admin.ModelAdmin):
+    list_display = ('user', 'group', 'is_muted', 'created_at')
+    search_fields = ('user__email', 'group__name')
+    raw_id_fields = ('user', 'group')
+
+
+@admin.register(CommunityModerationReport)
+class CommunityModerationReportAdmin(admin.ModelAdmin):
+    list_display = ('target_type', 'target_id', 'reported_by', 'status', 'created_at')
+    list_filter = ('target_type', 'status', 'created_at')
+    search_fields = ('reported_by__email', 'reason')
+    raw_id_fields = ('reported_by',)
+
+
+@admin.register(GroupChatReadState)
+class GroupChatReadStateAdmin(admin.ModelAdmin):
+    list_display = ('user', 'group', 'last_seen_message', 'last_seen_at')
+    search_fields = ('user__email', 'group__name')
+    raw_id_fields = ('user', 'group', 'last_seen_message')
