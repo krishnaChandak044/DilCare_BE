@@ -24,7 +24,10 @@ def env_list(name: str, default: list[str] | None = None) -> list[str]:
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-dev-only-change-me")
 DEBUG = env_bool("DJANGO_DEBUG", default=True)
-ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
+ALLOWED_HOSTS = env_list(
+    "DJANGO_ALLOWED_HOSTS",
+    default=["localhost", "127.0.0.1", "0.0.0.0", ".onrender.com"],
+)
 
 # Applications
 INSTALLED_APPS = [
@@ -90,8 +93,6 @@ CORS_ALLOWED_ORIGINS = env_list(
         "http://127.0.0.1:5175",
     ],
 )
-ALLOWED_HOSTS = ['0.0.0.0', '127.0.0.1', 'localhost']
-
 # Auth
 AUTH_USER_MODEL = "accounts.User"
 
@@ -199,7 +200,7 @@ USE_TZ = True
 # ---------------------------------------------------------------------------
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
-MEDIA_URL = "media/"
+MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
