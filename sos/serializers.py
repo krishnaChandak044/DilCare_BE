@@ -41,4 +41,5 @@ class SOSAlertSerializer(serializers.ModelSerializer):
 
 class TriggerSOSSerializer(serializers.Serializer):
     latitude = serializers.FloatField(required=False, allow_null=True)
-    longitude = serializers.FloatField(required=False, allow_null=True)
+    longitude = serializers.FloatField(required=False, allow_null=True)   
+    location_address = serializers.CharField(required=False, default="Unknown location")

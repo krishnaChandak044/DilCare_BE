@@ -8,7 +8,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 
-from .models import UserSettings, UserDevice
+from .models import UserSettings, UserDevice, Notification, NotificationPreference
 
 User = get_user_model()
 
@@ -20,14 +20,33 @@ class RegisterSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True, validators=[validate_password])
     password_confirm = serializers.CharField(write_only=True)
-    name = serializers.CharField(max_length=150, required=False, default="")
-    family_name = serializers.CharField(max_length=100, required=False, default="")
+    name = serializers.CharField(max_length=150, required=False, default="", allow_blank=True)
+    family_name = serializers.CharField(max_length=100, required=False, default="", allow_blank=True)
+    age = serializers.CharField(max_length=5, required=True)
+    gender = serializers.ChoiceField(
+        choices=["male", "female", "other", "prefer_not_say"],
+        required=True,
+    )
+    latitude = serializers.FloatField(required=False, allow_null=True)
+    longitude = serializers.FloatField(required=False, allow_null=True)
+    battery_level = serializers.IntegerField(required=False, allow_null=True, min_value=0, max_value=100)
 
     def validate_email(self, value):
         email = value.lower().strip()
         if User.objects.filter(email=email).exists():
             raise serializers.ValidationError("A user with this email already exists.")
         return email
+
+    def validate_age(self, value):
+        if not str(value).strip():
+            raise serializers.ValidationError("Age is required.")
+        try:
+            age_int = int(str(value).strip())
+            if age_int < 1 or age_int > 120:
+                raise serializers.ValidationError("Enter a valid age between 1 and 120.")
+        except ValueError:
+            raise serializers.ValidationError("Age must be a number.")
+        return str(value).strip()
 
     def validate(self, attrs):
         if attrs["password"] != attrs["password_confirm"]:
@@ -39,16 +58,25 @@ class RegisterSerializer(serializers.Serializer):
         validated_data.pop("password_confirm")
         name = validated_data.pop("name", "")
         family_name = validated_data.pop("family_name", "")
+        age = validated_data.pop("age", "")
+        gender = validated_data.pop("gender", "")
+        lat = validated_data.pop("latitude", None)
+        lon = validated_data.pop("longitude", None)
+        battery_level = validated_data.pop("battery_level", None)
 
         user = User.objects.create_user(
             email=validated_data["email"],
             password=validated_data["password"],
         )
+        user.age = str(age).strip()
+        user.gender = gender
+        update_fields = ["age", "gender"]
         if name:
             parts = name.strip().split(" ", 1)
             user.first_name = parts[0]
             user.last_name = parts[1] if len(parts) > 1 else ""
-            user.save(update_fields=["first_name", "last_name"])
+            update_fields.extend(["first_name", "last_name"])
+        user.save(update_fields=update_fields)
 
         # Atomically create family if name provided
         if family_name.strip():
@@ -61,6 +89,17 @@ class RegisterSerializer(serializers.Serializer):
                 family=family,
                 user=user,
                 role="admin",
+            )
+
+        if lat is not None and lon is not None:
+            from location.models import UserLocationPing
+
+            UserLocationPing.objects.create(
+                user=user,
+                latitude=lat,
+                longitude=lon,
+                source="gps",
+                battery_level=battery_level,
             )
 
         return user
@@ -93,7 +132,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             "id", "email", "name", "first_name", "last_name",
-            "phone", "age", "address", "emergency_contact", "blood_group",
+            "phone", "age", "gender", "address", "emergency_contact", "blood_group",
             "parent_link_code", "date_joined", "settings",
         ]
         read_only_fields = ["id", "email", "parent_link_code", "date_joined"]
@@ -120,6 +159,14 @@ class UserProfileSerializer(serializers.ModelSerializer):
                     raise serializers.ValidationError("Enter a valid age between 1 and 120.")
             except ValueError:
                 raise serializers.ValidationError("Age must be a number.")
+        return value
+
+    def validate_gender(self, value):
+        if not value:
+            return value
+        allowed = {"male", "female", "other", "prefer_not_say"}
+        if value not in allowed:
+            raise serializers.ValidationError(f"Gender must be one of: {', '.join(sorted(allowed))}")
         return value
 
     def validate_blood_group(self, value):
@@ -207,3 +254,35 @@ class ChangePasswordSerializer(serializers.Serializer):
         user.set_password(self.validated_data['new_password'])
         user.save()
         return user
+
+class NotificationSerializer(serializers.ModelSerializer):
+    """Serialize Notification objects with essential fields."""
+    
+    class Meta:
+        model = Notification
+        fields = [
+            'id', 'title', 'body', 'notification_type', 'action',
+            'data', 'read', 'opened', 'created_at',
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
+class NotificationPreferenceSerializer(serializers.ModelSerializer):
+    """Serialize NotificationPreference objects."""
+    
+    class Meta:
+        model = NotificationPreference
+        fields = [
+            'sos_alerts',
+            'medication_reminders',
+            'health_updates',
+            'family_messages',
+            'appointment_reminders',
+            'activity_goals',
+            'notification_sound',
+            'notification_vibration',
+            'quiet_hours_enabled',
+            'quiet_hours_start',
+            'quiet_hours_end',
+            'quiet_hours_exception_emergency',
+        ]

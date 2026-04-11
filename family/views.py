@@ -173,32 +173,30 @@ class CreateFamilyView(APIView):
 class JoinFamilyView(APIView):
     """
     POST /api/v1/family/join/
-    Join a family using a 6-char invite code.
+    Join a family using the family's invite code or any member's personal link code (parent_link_code).
+    If you are the only member of your current family, that empty group is dissolved so you can join.
     """
     permission_classes = [IsAuthenticated]
 
     @extend_schema(request=JoinFamilySerializer, responses={200: FamilySerializer})
     def post(self, request):
-        # Check if user already belongs to a family
-        if FamilyMembership.objects.filter(user=request.user).exists():
-            return Response(
-                {"error": "You already belong to a family. Leave it first to join another."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        existing = FamilyMembership.objects.select_related("family").filter(user=request.user).first()
+        if existing:
+            if existing.family.memberships.count() == 1:
+                fam = existing.family
+                existing.delete()
+                fam.delete()
+            else:
+                return Response(
+                    {"error": "You already belong to a family. Leave it first to join another."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         serializer = JoinFamilySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        code = serializer.validated_data["invite_code"]
+        family = serializer.validated_data["resolved_family"]
         nickname = serializer.validated_data.get("nickname", "")
-
-        try:
-            family = Family.objects.get(invite_code=code)
-        except Family.DoesNotExist:
-            return Response(
-                {"error": "Invalid invite code."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
         if family.is_full:
             return Response(
@@ -324,6 +322,53 @@ class RemoveMemberView(APIView):
 
         target.delete()
         return Response({"message": "Member removed from family."})
+
+
+class FamilyNotifyMemberView(APIView):
+    """
+    POST /api/v1/family/members/<member_id>/notify/
+    Sends an in-app notification so the member knows someone wants to reach them (call/alerts).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, member_id):
+        try:
+            my_membership = FamilyMembership.objects.select_related("family").get(
+                user=request.user
+            )
+        except FamilyMembership.DoesNotExist:
+            return Response(
+                {"error": "You are not part of any family."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            target = FamilyMembership.objects.select_related("user").get(
+                family=my_membership.family,
+                user_id=member_id,
+            )
+        except FamilyMembership.DoesNotExist:
+            return Response(
+                {"error": "Member not found in your family."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if target.user_id == request.user.id:
+            return Response(
+                {"error": "You cannot notify yourself."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from community.models import CommunityNotification
+
+        name = request.user.get_full_name() or request.user.email
+        CommunityNotification.objects.create(
+            user=target.user,
+            notification_type="general",
+            title="Family is trying to reach you",
+            message=f"{name} wants to connect with you from DilCare.",
+        )
+        return Response({"message": "Notification sent."})
 
 
 class RegenerateInviteCodeView(APIView):

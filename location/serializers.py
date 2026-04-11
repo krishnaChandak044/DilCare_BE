@@ -125,8 +125,14 @@ class GeofenceEventSerializer(serializers.ModelSerializer):
 
 
 class FamilyLiveLocationSerializer(serializers.Serializer):
-    parent_id = serializers.IntegerField()
-    parent_name = serializers.CharField()
+    """Live ping for a family member (same Family group)."""
+    member_id = serializers.IntegerField()
+    member_name = serializers.CharField()
+    parent_id = serializers.IntegerField(required=False)
+    parent_name = serializers.CharField(required=False)
+    phone = serializers.CharField(allow_blank=True, required=False, default="")
+    nickname = serializers.CharField(allow_blank=True, required=False, default="")
+    role = serializers.CharField(allow_blank=True, required=False, default="")
     relationship = serializers.CharField()
     latitude = serializers.DecimalField(max_digits=9, decimal_places=6)
     longitude = serializers.DecimalField(max_digits=9, decimal_places=6)

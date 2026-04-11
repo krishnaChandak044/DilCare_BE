@@ -8,7 +8,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
-from family.models import FamilyLink
+from family.models import FamilyLink, FamilyMembership
 
 from .models import (
     FamilyLocationPermission,
@@ -164,6 +164,10 @@ class FamilyPermissionUpdateView(generics.UpdateAPIView):
 
 
 class FamilyLiveLocationsView(APIView):
+    """
+    GET /api/v1/location/family/live/
+    Latest locations for other members in the same family group (Family + FamilyMembership).
+    """
     permission_classes = [IsAuthenticated]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "location_live"
@@ -175,42 +179,60 @@ class FamilyLiveLocationsView(APIView):
         except (ValueError, TypeError):
             max_age_minutes = 30
 
-        links = FamilyLink.objects.filter(child=request.user, is_active=True).select_related("parent")
+        try:
+            my_membership = FamilyMembership.objects.select_related("family").get(user=request.user)
+        except FamilyMembership.DoesNotExist:
+            return Response([])
+
         payload = []
         now = timezone.now()
 
-        for link in links:
-            permission = ensure_permission_for_link(link)
-            if not permission.can_view_live:
-                continue
+        others = (
+            FamilyMembership.objects.filter(family=my_membership.family)
+            .exclude(user=request.user)
+            .select_related("user")
+        )
 
-            share_settings, _ = LocationShareSetting.objects.get_or_create(user=link.parent)
+        for m in others:
+            member_user = m.user
+            share_settings, _ = LocationShareSetting.objects.get_or_create(user=member_user)
             if not share_settings.sharing_enabled:
                 continue
 
-            latest_ping = UserLocationPing.objects.filter(user=link.parent).order_by("-recorded_at").first()
+            latest_ping = (
+                UserLocationPing.objects.filter(user=member_user).order_by("-recorded_at").first()
+            )
             if not latest_ping:
                 continue
 
             age = now - latest_ping.recorded_at
-            is_live = age <= timedelta(minutes=min(max_age_minutes, share_settings.live_visibility_minutes))
+            window_m = min(max_age_minutes, share_settings.live_visibility_minutes)
+            is_live = age <= timedelta(minutes=window_m)
             if not is_live:
                 continue
 
-            precision_mode = resolve_precision_mode(share_settings, permission)
+            precision_mode = share_settings.share_precision
             latitude, longitude = apply_precision(latest_ping.latitude, latest_ping.longitude, precision_mode)
+
+            display_name = member_user.get_full_name() or member_user.email
+            rel_label = (m.nickname or "").strip() or m.get_role_display()
 
             payload.append(
                 {
-                    "parent_id": link.parent_id,
-                    "parent_name": link.parent.get_full_name() or link.parent.email,
-                    "relationship": link.get_relationship_display(),
+                    "member_id": member_user.id,
+                    "member_name": display_name,
+                    "parent_id": member_user.id,
+                    "parent_name": display_name,
+                    "phone": member_user.phone or "",
+                    "nickname": m.nickname or "",
+                    "role": m.role,
+                    "relationship": rel_label,
                     "latitude": latitude,
                     "longitude": longitude,
                     "accuracy_m": latest_ping.accuracy_m,
-                    "speed_kmh": latest_ping.speed_kmh if permission.can_view_speed else None,
-                    "battery_level": latest_ping.battery_level if permission.can_view_battery else None,
-                    "is_charging": latest_ping.is_charging if permission.can_view_battery else None,
+                    "speed_kmh": latest_ping.speed_kmh,
+                    "battery_level": latest_ping.battery_level,
+                    "is_charging": latest_ping.is_charging,
                     "recorded_at": latest_ping.recorded_at,
                     "is_live": is_live,
                     "precision_applied": precision_mode,

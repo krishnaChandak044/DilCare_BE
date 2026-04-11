@@ -10,6 +10,7 @@ from drf_spectacular.utils import extend_schema
 
 from core.mixins import OwnerQuerySetMixin
 from core.permissions import IsOwner
+from accounts.services import NotificationService
 from .models import EmergencyContact, SOSAlert
 from .serializers import (
     EmergencyContactSerializer,
@@ -55,6 +56,7 @@ class TriggerSOSView(APIView):
     """
     POST /api/v1/sos/trigger/  — trigger an SOS alert.
     Logs the alert, attaches all user contacts, returns alert details.
+    Sends push notifications to family members.
     """
     permission_classes = [IsAuthenticated]
 
@@ -71,6 +73,36 @@ class TriggerSOSView(APIView):
         # attach all user's contacts to the alert
         contacts = EmergencyContact.objects.filter(user=request.user)
         alert.notified_contacts.set(contacts)
+
+        # Send push notifications to family members
+        try:
+            from family.models import FamilyMember
+            family_members = FamilyMember.objects.filter(
+                parent_user=request.user
+            ).select_related('family_member_user')
+            
+            if family_members.exists():
+                recipients = [fm.family_member_user for fm in family_members]
+                location_address = ser.validated_data.get("location_address", "Unknown location")
+                
+                # Send notifications
+                NotificationService.send_to_users(
+                    users=recipients,
+                    title=f"🚨 SOS Alert: {request.user.get_full_name()} needs help!",
+                    body=f"Location: {location_address}. Respond immediately.",
+                    notification_type="sos_alert",
+                    action="sos_alert",
+                    data={
+                        "sos_alert_id": str(alert.id),
+                        "location_lat": str(alert.latitude),
+                        "location_lng": str(alert.longitude),
+                    }
+                )
+        except Exception as e:
+            # Log error but don't fail the SOS creation
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error sending SOS notifications: {str(e)}")
 
         return Response(
             SOSAlertSerializer(alert).data,
