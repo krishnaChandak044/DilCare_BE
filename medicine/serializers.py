@@ -10,6 +10,10 @@ class MedicineSerializer(serializers.ModelSerializer):
     """Serializer for Medicine CRUD operations."""
     time_list = serializers.ReadOnlyField()
     today_status = serializers.SerializerMethodField()
+    # Inventory computed fields (read-only, derived from model properties)
+    inventory_end_date = serializers.SerializerMethodField()
+    days_until_empty = serializers.SerializerMethodField()
+    is_running_low = serializers.SerializerMethodField()
 
     class Meta:
         model = Medicine
@@ -26,6 +30,12 @@ class MedicineSerializer(serializers.ModelSerializer):
             "is_active",
             "reminder_enabled",
             "reminder_minutes_before",
+            # Inventory
+            "current_quantity",
+            "doses_per_day",
+            "inventory_end_date",
+            "days_until_empty",
+            "is_running_low",
             "today_status",
             "created_at",
             "updated_at",
@@ -36,16 +46,16 @@ class MedicineSerializer(serializers.ModelSerializer):
         """Validate that schedule_times contains valid HH:MM format times."""
         time_pattern = re.compile(r"^([01]?[0-9]|2[0-3]):[0-5][0-9]$")
         times = [t.strip() for t in value.split(",") if t.strip()]
-        
+
         if not times:
             raise serializers.ValidationError("At least one schedule time is required.")
-        
+
         for t in times:
             if not time_pattern.match(t):
                 raise serializers.ValidationError(
                     f"Invalid time format: '{t}'. Use HH:MM format (e.g., 08:00, 14:30)."
                 )
-        
+
         return ",".join(times)  # Normalize
 
     def validate_name(self, value):
@@ -58,13 +68,13 @@ class MedicineSerializer(serializers.ModelSerializer):
         """Get today's intake status for this medicine."""
         from django.utils import timezone
         today = timezone.localdate()
-        
+
         intakes = obj.intakes.filter(scheduled_date=today)
         total = intakes.count()
         taken = intakes.filter(status="taken").count()
         missed = intakes.filter(status="missed").count()
         pending = intakes.filter(status="pending").count()
-        
+
         return {
             "total": total,
             "taken": taken,
@@ -72,6 +82,23 @@ class MedicineSerializer(serializers.ModelSerializer):
             "pending": pending,
             "all_taken": total > 0 and taken == total,
         }
+
+    def get_inventory_end_date(self, obj):
+        d = obj.inventory_end_date
+        return d.isoformat() if d else None
+
+    def get_days_until_empty(self, obj):
+        return obj.days_until_empty
+
+    def get_is_running_low(self, obj):
+        return obj.is_running_low
+
+
+class MedicineInventoryUpdateSerializer(serializers.ModelSerializer):
+    """Lightweight serializer for PATCH /medicine/medicines/<id>/inventory/ ."""
+    class Meta:
+        model = Medicine
+        fields = ["current_quantity", "doses_per_day"]
 
 
 class MedicineIntakeSerializer(serializers.ModelSerializer):
@@ -144,7 +171,7 @@ class PrescriptionSerializer(serializers.ModelSerializer):
 class TodayMedicineSerializer(serializers.Serializer):
     """
     Serializer for today's medicine schedule view.
-    Combines medicine info with today's intake status.
+    Combines medicine info with today's intake status + inventory data.
     """
     id = serializers.UUIDField()
     name = serializers.CharField()
@@ -154,6 +181,12 @@ class TodayMedicineSerializer(serializers.Serializer):
     taken = serializers.BooleanField()
     missed = serializers.BooleanField()
     intake_id = serializers.UUIDField(allow_null=True)
+    # Inventory
+    current_quantity = serializers.IntegerField(allow_null=True)
+    doses_per_day = serializers.IntegerField()
+    inventory_end_date = serializers.DateField(allow_null=True)
+    days_until_empty = serializers.IntegerField(allow_null=True)
+    is_running_low = serializers.BooleanField()
 
 
 class MedicineSummarySerializer(serializers.Serializer):
@@ -166,3 +199,5 @@ class MedicineSummarySerializer(serializers.Serializer):
     today_pending = serializers.IntegerField()
     adherence_rate_7d = serializers.FloatField()
     adherence_rate_30d = serializers.FloatField()
+    # Inventory summary
+    running_low_count = serializers.IntegerField()

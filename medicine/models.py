@@ -1,6 +1,8 @@
 """
 Medicine — Models for medicine tracking and prescription storage.
 """
+import math
+from datetime import date, timedelta
 from django.db import models
 from django.conf import settings
 from core.models import SoftDeleteModel
@@ -43,7 +45,17 @@ class Medicine(SoftDeleteModel):
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
-    
+
+    # ── Inventory tracking ────────────────────────────────────────
+    current_quantity = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text="Number of pills/doses currently in stock"
+    )
+    doses_per_day = models.PositiveSmallIntegerField(
+        default=1,
+        help_text="How many doses/pills the user takes per day (auto-derived from schedule_times count)"
+    )
+
     # Notification settings
     reminder_enabled = models.BooleanField(default=True)
     reminder_minutes_before = models.PositiveSmallIntegerField(default=15)
@@ -58,6 +70,37 @@ class Medicine(SoftDeleteModel):
     def time_list(self):
         """Return schedule times as a list."""
         return [t.strip() for t in self.schedule_times.split(",") if t.strip()]
+
+    @property
+    def computed_doses_per_day(self):
+        """Derive doses-per-day from schedule_times count."""
+        return max(1, len(self.time_list))
+
+    @property
+    def inventory_end_date(self):
+        """Compute the date on which the medicine will run out (None if no quantity set)."""
+        if self.current_quantity is None:
+            return None
+        dpd = self.doses_per_day or self.computed_doses_per_day
+        if dpd <= 0:
+            return None
+        days_left = math.floor(self.current_quantity / dpd)
+        return date.today() + timedelta(days=days_left)
+
+    @property
+    def days_until_empty(self):
+        """Days remaining until medicine runs out (None if no quantity)."""
+        end = self.inventory_end_date
+        if end is None:
+            return None
+        delta = (end - date.today()).days
+        return max(0, delta)
+
+    @property
+    def is_running_low(self):
+        """True when medicine will run out within 2 days."""
+        d = self.days_until_empty
+        return d is not None and d <= 2
 
 
 class MedicineIntake(SoftDeleteModel):

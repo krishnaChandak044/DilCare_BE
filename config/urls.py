@@ -16,6 +16,7 @@ urlpatterns = [
     # ── API v1 ──────────────────────────────────────────────
     path("api/v1/auth/", include("accounts.urls.auth_urls")),
     path("api/v1/user/", include("accounts.urls.user_urls")),
+    path("api/v1/notifications/", include("accounts.urls.notifications_urls")),
     path("api/v1/health/", include("health.urls")),
     path("api/v1/medicine/", include("medicine.urls")),
     path("api/v1/water/", include("water.urls")),

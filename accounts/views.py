@@ -2,16 +2,18 @@
 Accounts — API Views for auth and profile management.
 Enhanced with settings, devices, logout, and change password.
 """
-from rest_framework import generics, status
+from rest_framework import generics, status, viewsets
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
+from rest_framework.decorators import action
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.views import TokenObtainPairView
+from django.utils import timezone
 
-from .models import UserSettings, UserDevice
+from .models import UserSettings, UserDevice, Notification, NotificationPreference
 from .serializers import (
     RegisterSerializer,
     UserProfileSerializer,
@@ -20,6 +22,8 @@ from .serializers import (
     UserDeviceSerializer,
     LogoutSerializer,
     ChangePasswordSerializer,
+    NotificationSerializer,
+    NotificationPreferenceSerializer,
 )
 
 
@@ -193,3 +197,215 @@ class LoginView(TokenObtainPairView):
     """
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "auth_login"
+
+class NotificationViewSet(viewsets.ViewSet):
+    """ViewSet for notification management."""
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=False, methods=['post'])
+    def register_token(self, request):
+        """
+        POST /api/v1/notifications/register_token/
+        Register device token for push notifications.
+        """
+        try:
+            token = request.data.get('device_token')
+            platform = request.data.get('platform', 'android')
+            app_version = request.data.get('app_version', '')
+
+            if not token:
+                return Response(
+                    {'success': False, 'error': 'device_token required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Update or create device token record
+            device, created = UserDevice.objects.update_or_create(
+                user=request.user,
+                device_token=token,
+                defaults={
+                    'device_type': platform,
+                    'is_active': True,
+                }
+            )
+
+            return Response({
+                'success': True,
+                'message': 'Device token registered',
+                'device_id': str(device.id),
+            })
+
+        except Exception as e:
+            return Response(
+                {'success': False, 'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['get'])
+    def history(self, request):
+        """
+        GET /api/v1/notifications/history/?limit=20&offset=0
+        Get notification history for the user.
+        """
+        try:
+            limit = int(request.query_params.get('limit', 20))
+            offset = int(request.query_params.get('offset', 0))
+            unread_only = request.query_params.get('unread_only', 'false').lower() == 'true'
+
+            notifications = Notification.objects.filter(user=request.user)
+
+            if unread_only:
+                notifications = notifications.filter(read=False)
+
+            total = notifications.count()
+            notifications = notifications[offset:offset+limit]
+
+            serializer = NotificationSerializer(notifications, many=True)
+
+            return Response({
+                'success': True,
+                'total': total,
+                'count': len(notifications),
+                'offset': offset,
+                'limit': limit,
+                'notifications': serializer.data,
+            })
+
+        except Exception as e:
+            return Response(
+                {'success': False, 'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['post'])
+    def mark_as_read(self, request):
+        """
+        POST /api/v1/notifications/mark_as_read/
+        Mark one or more notifications as read.
+        """
+        try:
+            notification_ids = request.data.get('notification_ids', [])
+
+            if not notification_ids:
+                return Response(
+                    {'success': False, 'error': 'notification_ids required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            updated = Notification.objects.filter(
+                user=request.user,
+                id__in=notification_ids
+            ).update(
+                read=True,
+                read_at=timezone.now()
+            )
+
+            return Response({
+                'success': True,
+                'message': f'{updated} notifications marked as read',
+                'updated_count': updated,
+            })
+
+        except Exception as e:
+            return Response(
+                {'success': False, 'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['post'])
+    def log_interaction(self, request):
+        """
+        POST /api/v1/notifications/log_interaction/
+        Log notification interaction (opened/dismissed).
+        """
+        try:
+            notification_id = request.data.get('notification_id')
+            interaction_type = request.data.get('interaction_type', 'opened')
+
+            if not notification_id:
+                return Response(
+                    {'success': False, 'error': 'notification_id required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            notification = Notification.objects.filter(
+                user=request.user,
+                id=notification_id
+            ).first()
+
+            if notification:
+                if interaction_type == 'opened':
+                    notification.mark_as_opened()
+                elif interaction_type == 'read':
+                    notification.mark_as_read()
+
+            return Response({'success': True})
+
+        except Exception as e:
+            return Response(
+                {'success': False, 'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['get', 'patch'])
+    def preferences(self, request):
+        """
+        GET /api/v1/notifications/preferences/
+        Get or update user notification preferences.
+        """
+        try:
+            prefs, created = NotificationPreference.objects.get_or_create(
+                user=request.user
+            )
+
+            if request.method == 'GET':
+                serializer = NotificationPreferenceSerializer(prefs)
+                return Response({
+                    'success': True,
+                    'preferences': serializer.data,
+                })
+
+            elif request.method == 'PATCH':
+                serializer = NotificationPreferenceSerializer(
+                    prefs,
+                    data=request.data,
+                    partial=True
+                )
+                if serializer.is_valid():
+                    serializer.save()
+                    return Response({
+                        'success': True,
+                        'message': 'Preferences updated',
+                        'preferences': serializer.data,
+                    })
+                else:
+                    return Response(
+                        {'success': False, 'errors': serializer.errors},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+        except Exception as e:
+            return Response(
+                {'success': False, 'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['delete'])
+    def clear_all(self, request):
+        """
+        DELETE /api/v1/notifications/clear_all/
+        Delete all notifications for the user.
+        """
+        try:
+            count, _ = Notification.objects.filter(user=request.user).delete()
+            return Response({
+                'success': True,
+                'message': f'Deleted {count} notifications',
+                'deleted_count': count,
+            })
+
+        except Exception as e:
+            return Response(
+                {'success': False, 'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

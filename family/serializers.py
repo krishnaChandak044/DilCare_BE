@@ -17,15 +17,26 @@ class CreateFamilySerializer(serializers.Serializer):
 
 
 class JoinFamilySerializer(serializers.Serializer):
-    """POST /api/v1/family/join/ — join using invite code."""
+    """POST /api/v1/family/join/ — join using family invite code or a member's personal link code."""
     invite_code = serializers.CharField(max_length=6, min_length=6)
     nickname = serializers.CharField(max_length=50, required=False, default="")
 
-    def validate_invite_code(self, value):
-        code = value.upper().strip()
-        if not Family.objects.filter(invite_code=code).exists():
-            raise serializers.ValidationError("Invalid invite code. Please check and try again.")
-        return code
+    def validate(self, attrs):
+        code = attrs["invite_code"].upper().strip()
+        family = Family.objects.filter(invite_code=code).first()
+        if not family:
+            linker = User.objects.filter(parent_link_code=code).first()
+            if linker:
+                fm = FamilyMembership.objects.filter(user=linker).select_related("family").first()
+                if fm:
+                    family = fm.family
+        if not family:
+            raise serializers.ValidationError(
+                {"invite_code": "Invalid code. Use the family invite code or a member's personal link code."}
+            )
+        attrs["resolved_family"] = family
+        attrs["invite_code"] = code
+        return attrs
 
 
 class FamilyMemberSerializer(serializers.ModelSerializer):
@@ -35,12 +46,13 @@ class FamilyMemberSerializer(serializers.ModelSerializer):
     name = serializers.SerializerMethodField()
     phone = serializers.CharField(source="user.phone", read_only=True)
     age = serializers.CharField(source="user.age", read_only=True)
+    gender = serializers.CharField(source="user.gender", read_only=True)
     blood_group = serializers.CharField(source="user.blood_group", read_only=True)
 
     class Meta:
         model = FamilyMembership
         fields = [
-            "id", "user_id", "email", "name", "phone", "age",
+            "id", "user_id", "email", "name", "phone", "age", "gender",
             "blood_group", "role", "nickname", "joined_at",
         ]
         read_only_fields = fields

@@ -9,6 +9,7 @@ from .views import (
     MyFamilyView,
     LeaveFamilyView,
     RemoveMemberView,
+    FamilyNotifyMemberView,
     RegenerateInviteCodeView,
     FamilyMemberHealthView,
     FamilyPlanView,
@@ -34,4 +35,5 @@ urlpatterns = [
 
     # View any family member's health
     path("members/<int:member_id>/health/", FamilyMemberHealthView.as_view(), name="member-health"),
+    path("members/<int:member_id>/notify/", FamilyNotifyMemberView.as_view(), name="member-notify"),
 ]
