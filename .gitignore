@@ -38,4 +38,3 @@ htmlcov/
 *.env
 .env.*
 secrets.json
-firebase_service_account.json
