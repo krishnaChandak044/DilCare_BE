@@ -208,8 +208,6 @@ class FamilyLiveLocationsView(APIView):
             age = now - latest_ping.recorded_at
             window_m = min(max_age_minutes, share_settings.live_visibility_minutes)
             is_live = age <= timedelta(minutes=window_m)
-            if not is_live:
-                continue
 
             precision_mode = share_settings.share_precision
             latitude, longitude = apply_precision(latest_ping.latitude, latest_ping.longitude, precision_mode)
