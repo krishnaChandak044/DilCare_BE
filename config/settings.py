@@ -73,7 +73,7 @@ MIDDLEWARE = [
 ]
 
 # CORS — allow React Native dev traffic + Vite web dev server + other development ports
-CORS_ALLOW_ALL_ORIGINS = env_bool("CORS_ALLOW_ALL_ORIGINS", default=True)
+CORS_ALLOW_ALL_ORIGINS = env_bool("CORS_ALLOW_ALL_ORIGINS", default=False)
 CORS_ALLOWED_ORIGINS = env_list(
     "CORS_ALLOWED_ORIGINS",
     default=[
