@@ -52,6 +52,9 @@ class MedicineListCreateView(OwnerQuerySetMixin, generics.ListCreateAPIView):
             serializer.validated_data["doses_per_day"] = doses
         medicine = serializer.save(user=self.request.user)
         self._generate_intakes_for_date(medicine, timezone.localdate())
+        
+        # Trigger family notification that a new medicine was added
+        _notify_family_new_medicine(self.request.user, medicine)
 
     def _generate_intakes_for_date(self, medicine, date):
         """Generate intake records for a medicine on a given date."""
@@ -377,6 +380,40 @@ class PrescriptionDetailView(OwnerQuerySetMixin, generics.RetrieveUpdateDestroyA
 
 
 # ============ Internal Helper ============
+
+def _notify_family_new_medicine(user, medicine):
+    """
+    Create in-app Notification records for all family members of `user`
+    telling them that a new medicine was added.
+    """
+    try:
+        from accounts.models import Notification
+        from family.models import FamilyMembership
+
+        # Get this user's family
+        try:
+            membership = FamilyMembership.objects.select_related("family").get(user=user)
+        except FamilyMembership.DoesNotExist:
+            return
+
+        family = membership.family
+        # All other members in the family
+        other_memberships = FamilyMembership.objects.filter(
+            family=family
+        ).exclude(user=user).select_related("user")
+
+        for m in other_memberships:
+            Notification.objects.create(
+                user=m.user,
+                title="New Medicine Added",
+                body=f"{user.get_full_name() or user.username} has added a new medicine: {medicine.name}.",
+                notification_type="medication_reminder",
+                action="open_medicine",
+                data={"medicine_id": str(medicine.id), "user_id": str(user.id)}
+            )
+            # Todo: trigger Expo Push Notification here if FCM setup
+    except Exception as e:
+        print(f"Error sending new medicine notification: {e}")
 
 def _notify_family_medicine_low(user, medicine):
     """
