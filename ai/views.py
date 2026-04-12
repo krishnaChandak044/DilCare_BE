@@ -57,6 +57,13 @@ class ChatView(APIView):
             conversation = Conversation.objects.create(
                 user=request.user, title=title
             )
+            # Initialize with the standard greeting
+            Message.objects.create(
+                conversation=conversation,
+                role="assistant",
+                content="Hello! I'm your DilCare health assistant. Ask me anything about your health, medications, or wellness tips!",
+                model_used="system",
+            )
 
         # Save user message
         user_msg = Message.objects.create(
