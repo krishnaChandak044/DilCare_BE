@@ -208,7 +208,7 @@ MEDIA_ROOT = BASE_DIR / "media"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # AI Assistant Configuration
-AI_PROVIDER = "groq"                        # "groq" | "gemini" | "ollama"
-AI_API_KEY = os.getenv("AI_API_KEY", "")
-AI_MODEL = ""                                # Leave blank for provider default
+AI_PROVIDER = "gemini"                        # "groq" | "gemini" | "ollama"
+AI_API_KEY = "AIzaSyBilLL3BnPFmVQTBKlXNIOs_OX3zlT7oHM"
+AI_MODEL = "gemini-2.5-flash"
 OLLAMA_BASE_URL = "http://localhost:11434"   # Only needed for Ollama
